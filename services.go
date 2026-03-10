@@ -11,23 +11,6 @@ import (
 
 /**
 敏感词检查器
-使用:
-  // 创建敏感词检查器
-  checker := sensitive_filter.New()
-  // 从文件加载敏感词库
-  checker.LoadFromTextFile("D:/abel/mygit/sensitive-check/document/敏感词库.txt")
-
-  // 测试文本
-  testText := "这是一个包含色情和暴力内容的文本，涉及信息。"
-
-  replacedText := checker.Replace(testText, '*')
-  fmt.Printf("替换后的文本: %s\n", replacedText)
-
-    hasSensitive := checker.Contains(testText)
-  fmt.Printf("文本是否包含敏感词: %v\n", hasSensitive)
-
-  foundWords := checker.FindAll(testText)
-  fmt.Printf("找到的敏感词: %v\n", foundWords)
 
 */
 
