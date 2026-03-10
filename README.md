@@ -26,18 +26,18 @@ package main
 
 import (
     "fmt"
-    "github.com/abelyi907/sensitive-filter"
+	filter "github.com/abelyi907/sensitive-filter"
 )
 
 func main() {
-    // 创建敏感词检查器
-    checker := sensitive_filter.New()
+   
+	checker := filter.SensitiveChecker.New()  // 创建敏感词检查器
+	checker.LoadFromTextFile("./words.txt")   // 从文件加载敏感词库
     
-    // 从文件加载敏感词库
-    checker.LoadFromTextFile("D:/abel/mygit/sensitive-check/document/敏感词库.txt")
+    
 
     // 测试文本
-    testText := "这是一个包含色情和暴力内容的文本，涉及信息。"
+    testText := "这是一个包含敏感词1和敏感词2内容的文本，涉及信息。"
 
     // 1. 替换敏感词
     replacedText := checker.Replace(testText, '*')
@@ -58,7 +58,7 @@ func main() {
 #### 1. 创建检查器实例
 
 ```go
-checker := sensitive_filter.New()
+checker :=  filter.SensitiveChecker.New() 
 ```
 
 #### 2. 加载敏感词库
@@ -122,11 +122,9 @@ checker.LoadFromTextFile("sensitive-words.txt")
 敏感词库文件应为纯文本格式，每行一个敏感词：
 
 ```
-色情
-暴力
-违禁品
-赌博
-毒品
+敏感词1
+敏感词2
+敏感词3
 ```
 
 ### ⚙️ 文本预处理
@@ -178,12 +176,12 @@ package main
 import (
     "fmt"
     "log"
-    "github.com/abelyi907/sensitive-filter"
+   filter "github.com/abelyi907/sensitive-filter"
 )
 
 func main() {
     // 创建敏感词检查器
-    checker := sensitive_filter.New()
+    checker := filter.SensitiveChecker.New()
     
     // 加载敏感词库（带热重载）
     err := checker.LoadFromTextFile("./config/sensitive-words.txt")

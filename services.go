@@ -45,7 +45,7 @@ func (swc *SensitiveWordChecker) format(text string) string {
 	return text
 }
 
-// 添加敏感词到字典树
+// Insert 添加敏感词到字典树
 func (swc *SensitiveWordChecker) Insert(word string) {
 	node := swc.root
 	word = swc.format(word)
@@ -177,7 +177,7 @@ func (swc *SensitiveWordChecker) LoadFromFileByLine(filepath string) error {
 	return scanner.Err()
 }
 
-// 敏感词替换，将敏感词替换为指定字符
+// Replace 敏感词替换，将敏感词替换为指定字符
 func (swc *SensitiveWordChecker) Replace(text string, replacement rune) string {
 	runes := []rune(text)
 	textLen := len(runes)
@@ -217,7 +217,7 @@ func (swc *SensitiveWordChecker) Replace(text string, replacement rune) string {
 	return string(runes)
 }
 
-// 从文本文件中加载敏感词库,监察库中的内容有变化时，重新加载
+// LoadFromTextFile 从文本文件中加载敏感词库,监察库中的内容有变化时，重新加载
 func (swc *SensitiveWordChecker) LoadFromTextFile(filepath string) {
 	err := swc.LoadFromFileByLine(filepath)
 	if err != nil {
