@@ -52,6 +52,10 @@ func TestHomophoneFilter(t *testing.T) {
 		t.Fatal("检查谐音敏感词失败")
 	}
 
+	if !checker.Contains("这是dubo内容") {
+		t.Fatal("检查谐音敏感词失败!")
+	}
+
 	// 测试3: 查找所有敏感词（包括谐音）
 	words := checker.FindAll("这里有暴力和睹博行为")
 	if len(words) == 0 {
