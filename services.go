@@ -38,7 +38,7 @@ func (swc *SensitiveWordChecker) New() *SensitiveWordChecker {
 			children: make(map[rune]*TrieNode),
 			isEnd:    false,
 		},
-		homophoneMode: false,
+		homophoneMode: true, // 默认启用谐音模式
 		pinyinArgs: pinyin.Args{
 			Style:     pinyin.Normal, // 不带声调的拼音
 			Separator: "",
@@ -70,6 +70,32 @@ func (swc *SensitiveWordChecker) textToPinyin(text string) string {
 	return strings.Join(py, "")
 }
 
+// textToPinyinWithMapping 将文本转换为拼音，并返回拼音到原文位置的映射
+func (swc *SensitiveWordChecker) textToPinyinWithMapping(text string) (string, []int) {
+	runes := []rune(text)
+	pinyinParts := pinyin.LazyConvert(text, &swc.pinyinArgs)
+
+	// 构建拼音字符串和位置映射
+	var pinyinStr strings.Builder
+	positionMap := make([]int, 0)
+
+	for i, py := range pinyinParts {
+		if i < len(runes) {
+			// 如果拼音为空（非中文字符），保留原字符
+			if py == "" {
+				py = string(runes[i])
+			}
+			// 记录每个拼音字符对应的原文位置
+			for j := 0; j < len(py); j++ {
+				positionMap = append(positionMap, i)
+			}
+		}
+		pinyinStr.WriteString(py)
+	}
+
+	return pinyinStr.String(), positionMap
+}
+
 // Insert 添加敏感词到字典树
 func (swc *SensitiveWordChecker) Insert(word string) {
 	node := swc.root
@@ -89,10 +115,20 @@ func (swc *SensitiveWordChecker) Insert(word string) {
 	}
 	node.isEnd = true
 
-	// 如果启用了谐音模式，同时插入拼音形式
-	if swc.homophoneMode {
+	// 如果启用了谐音模式，且敏感词只包含中文字符，则同时插入拼音形式
+	if swc.homophoneMode && isPureChinese(word) {
 		swc.insertPinyin(word)
 	}
+}
+
+// isPureChinese 检查字符串是否只包含中文字符
+func isPureChinese(s string) bool {
+	for _, r := range s {
+		if r < '\u4e00' || r > '\u9fff' {
+			return false
+		}
+	}
+	return true
 }
 
 // insertPinyin 插入词的拼音形式（用于谐音匹配）
@@ -285,15 +321,80 @@ func (swc *SensitiveWordChecker) LoadFromFileByLine(filepath string) error {
 
 // Replace 敏感词替换，将敏感词替换为指定字符
 func (swc *SensitiveWordChecker) Replace(text string, replacement rune) string {
-	fs := swc.FindAll(text)
-	if len(fs) == 0 {
-		return text
+	text = swc.format(text)
+	runes := []rune(text)
+	textLen := len(runes)
+
+	// 记录需要替换的位置
+	replacePositions := make(map[int]bool)
+
+	// 首先查找原文本中的敏感词
+	for i := 0; i < textLen; i++ {
+		node := swc.root
+		j := i
+		matchStart := i
+
+		for j < textLen {
+			char := runes[j]
+			if child, exists := node.children[char]; exists {
+				node = child
+				if node.isEnd && !node.isHomophone {
+					// 找到敏感词，记录需要替换的位置
+					for k := matchStart; k <= j; k++ {
+						replacePositions[k] = true
+					}
+					break
+				}
+				j++
+			} else {
+				break
+			}
+		}
 	}
-	//循环敏感词
-	for _, f := range fs {
-		text = strings.ReplaceAll(text, f, strings.Repeat(string(replacement), len(f)))
+
+	// 如果启用了谐音模式，同时查找拼音形式的匹配
+	if swc.homophoneMode {
+		pinyinText, positionMap := swc.textToPinyinWithMapping(text)
+		pinyinRunes := []rune(pinyinText)
+		pinyinLen := len(pinyinRunes)
+
+		for i := 0; i < pinyinLen; i++ {
+			node := swc.root
+			j := i
+			matchStart := i
+			var matchedLen int
+
+			for j < pinyinLen {
+				char := pinyinRunes[j]
+				if child, exists := node.children[char]; exists {
+					node = child
+					matchedLen++
+					if node.isEnd && node.isHomophone {
+						// 找到谐音匹配，通过位置映射找到原文中对应的字符
+						for k := matchStart; k < matchStart+matchedLen && k < len(positionMap); k++ {
+							originalPos := positionMap[k]
+							if originalPos < textLen {
+								replacePositions[originalPos] = true
+							}
+						}
+						break
+					}
+					j++
+				} else {
+					break
+				}
+			}
+		}
 	}
-	return text
+
+	// 执行替换
+	for i := 0; i < textLen; i++ {
+		if replacePositions[i] {
+			runes[i] = replacement
+		}
+	}
+
+	return string(runes)
 }
 
 // LoadFromTextFile 从文本文件中加载敏感词库,监察库中的内容有变化时，重新加载

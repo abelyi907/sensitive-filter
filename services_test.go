@@ -17,7 +17,7 @@ func TestService(t *testing.T) {
 	// 1. 替换敏感词
 	replacedText := checker.Replace(testText, '*')
 	if replacedText != "这是一个包含****和****内容的文本，涉及信息。" {
-		t.Logf("替换后的文本错误: %s", replacedText)
+		t.Fatalf("替换敏感词失败")
 	}
 	if !checker.Contains("我反对使用敏感词2") {
 		t.Fatalf("检查是否包含敏感词失败")
@@ -35,7 +35,7 @@ func TestHomophoneFilter(t *testing.T) {
 	checker := SensitiveChecker.New()
 
 	// 启用谐音模式
-	checker.EnableHomophoneMode()
+	//checker.EnableHomophoneMode()
 
 	// 插入一些敏感词
 	checker.Insert("敏感")
@@ -44,29 +44,31 @@ func TestHomophoneFilter(t *testing.T) {
 
 	// 测试1: 检测原文本中的敏感词
 	if !checker.Contains("这是敏感内容") {
-		t.Fatal("应该检测到敏感词")
+		t.Fatal("检测敏感词失败")
 	}
 
 	// 测试2: 检测谐音词（"敏敢"与"敏感"拼音相同）
 	if !checker.Contains("这是敏敢内容") {
-		t.Fatal("应该检测到谐音敏感词")
+		t.Fatal("检查谐音敏感词失败")
 	}
 
 	// 测试3: 查找所有敏感词（包括谐音）
 	words := checker.FindAll("这里有暴力和睹博行为")
 	if len(words) == 0 {
-		t.Fatal("应该找到敏感词或谐音词")
+		t.Fatal("查找敏感词或谐音词失败")
 	}
 	t.Logf("找到的敏感词: %v", words)
 
 	// 测试4: 替换敏感词和谐音词
 	replaced := checker.Replace("不要暴力和睹博", '*')
-	t.Logf("替换后的文本: %s", replaced)
+	if replaced != "不要**和**" {
+		t.Fatal("替换谐音敏感词失败")
+	}
 
 	// 测试5: 禁用谐音模式后，不应该检测到谐音词
 	checker.DisableHomophoneMode()
 	if checker.Contains("这是敏敢内容") {
-		t.Fatal("禁用谐音模式后不应该检测到谐音词")
+		t.Fatal("禁用谐音模式后还是检查到谐音词了")
 	}
 
 	// 但仍然应该检测到原文
@@ -105,7 +107,6 @@ func TestMultipleHomophones(t *testing.T) {
 // 测试性能：确保谐音模式不会显著影响性能
 func TestHomophonePerformance(t *testing.T) {
 	checker := SensitiveChecker.New()
-	checker.EnableHomophoneMode()
 
 	// 插入大量敏感词
 	for i := 0; i < 100; i++ {
@@ -117,12 +118,5 @@ func TestHomophonePerformance(t *testing.T) {
 	// 执行多次检测
 	for i := 0; i < 1000; i++ {
 		checker.Contains(testText)
-	}
-}
-
-func TestTest(t *testing.T) {
-	str1 := "我是中国人"
-	for _, v := range str1 {
-		t.Log(string(v))
 	}
 }
