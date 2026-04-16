@@ -10,6 +10,7 @@
 - ✅ **热重载**：自动监控敏感词库文件变化，实时重新加载，无需重启服务
 - ✅ **大小写不敏感**：自动将文本转换为小写进行匹配
 - ✅ **中文支持**：完美支持中文、英文及其他 Unicode 字符
+- ✅ **谐音过滤**：支持基于拼音的谐音词检测，有效识别同音字变体
 
 ## 安装
 
@@ -53,6 +54,48 @@ func main() {
 }
 ```
 
+### 谐音过滤功能
+
+启用谐音过滤模式后，系统会自动检测同音字变体：
+
+```go
+package main
+
+import (
+    "fmt"
+	filter "github.com/abelyi907/sensitive-filter"
+)
+
+func main() {
+    checker := filter.SensitiveChecker.New()
+    
+    // 启用谐音过滤模式
+    checker.EnableHomophoneMode()
+    
+    // 添加敏感词
+    checker.Insert("敏感")
+    checker.Insert("暴力")
+    
+    // 检测原始敏感词
+    fmt.Println(checker.Contains("这是敏感内容"))  // true
+    
+    // 检测谐音词（"敏敢"与"敏感"拼音相同）
+    fmt.Println(checker.Contains("这是敏敢内容"))  // true
+    
+    // 查找所有敏感词（包括谐音）
+    words := checker.FindAll("这里有暴力和睹博行为")
+    fmt.Println(words)  // ["暴力", "[谐音]dubo"]
+    
+    // 替换敏感词和谐音词
+    replaced := checker.Replace("不要暴力和睹博", '*')
+    fmt.Println(replaced)  // "不要**和**"
+    
+    // 禁用谐音模式
+    checker.DisableHomophoneMode()
+    fmt.Println(checker.Contains("这是敏敢内容"))  // false
+}
+```
+
 ### API 说明
 
 #### 1. 创建检查器实例
@@ -81,21 +124,31 @@ err := checker.LoadFromFileByLine("path/to/sensitive-words.txt")
 checker.Insert("敏感词")
 ```
 
-#### 4. 检测文本是否包含敏感词
+#### 4. 启用/禁用谐音过滤模式
+
+```go
+// 启用谐音模式（自动检测同音字）
+checker.EnableHomophoneMode()
+
+// 禁用谐音模式
+checker.DisableHomophoneMode()
+```
+
+#### 5. 检测文本是否包含敏感词
 
 ```go
 contains := checker.Contains("这段文本包含敏感词")
 // 返回：true 或 false
 ```
 
-#### 5. 查找文本中的所有敏感词
+#### 6. 查找文本中的所有敏感词
 
 ```go
 words := checker.FindAll("这段文本包含多个敏感词和违禁词")
 // 返回：["敏感词", "违禁词"]
 ```
 
-#### 6. 替换敏感词
+#### 7. 替换敏感词
 
 ```go
 replaced := checker.Replace("这段文本包含敏感词", '*')
@@ -116,6 +169,31 @@ checker.LoadFromTextFile("sensitive-words.txt")
 // 系统会自动检测到变化并重新加载词库
 // 日志输出：敏感词库已更新，重新加载词库...
 ```
+
+### 🎯 谐音过滤
+
+启用谐音过滤模式后，系统会将中文转换为拼音进行匹配，从而检测同音字变体。
+
+**工作原理：**
+1. 插入敏感词时，同时将其拼音形式存入字典树
+2. 检测文本时，同时将原文和拼音形式进行匹配
+3. 谐音匹配结果会标记为 `[谐音]` 前缀
+
+**使用示例：**
+```go
+checker.EnableHomophoneMode()
+checker.Insert("敏感")
+
+// 以下都会检测到
+checker.Contains("敏感内容")  // true - 原文匹配
+checker.Contains("敏敢内容")  // true - 谐音匹配 (min gan)
+checker.Contains("民感内容")  // true - 谐音匹配 (min gan)
+```
+
+**注意事项：**
+- 谐音模式会增加内存占用（存储拼音形式）
+- 可能会产生误报（同音但不同义的词）
+- 建议根据实际场景选择是否启用
 
 ### 📝 文件格式要求
 
@@ -165,6 +243,7 @@ sensitive-filter/
 2. **内存占用**：敏感词库较大时，会占用较多内存，请根据实际场景评估
 3. **文件路径**：使用 Windows 路径时，注意使用正斜杠 `/` 或双反斜杠 `\\`
 4. **热重载延迟**：文件监控有 2 秒的检测间隔，修改文件后最多 2 秒内生效
+5. **谐音模式**：启用谐音模式会增加内存占用和可能的误报，建议根据实际需求选择
 
 ## 示例代码
 

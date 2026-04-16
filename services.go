@@ -6,7 +6,8 @@ import (
 	"os"
 	"strings"
 	"time"
-	"unicode"
+
+	"github.com/mozillazg/go-pinyin"
 )
 
 /**
@@ -16,13 +17,16 @@ import (
 
 // 字典树节点
 type TrieNode struct {
-	children map[rune]*TrieNode
-	isEnd    bool
+	children    map[rune]*TrieNode
+	isEnd       bool
+	isHomophone bool // 标记是否为谐音词
 }
 
 // 敏感词检查器
 type SensitiveWordChecker struct {
-	root *TrieNode
+	root          *TrieNode
+	homophoneMode bool // 是否启用谐音模式
+	pinyinArgs    pinyin.Args
 }
 
 var SensitiveChecker *SensitiveWordChecker
@@ -34,6 +38,11 @@ func (swc *SensitiveWordChecker) New() *SensitiveWordChecker {
 			children: make(map[rune]*TrieNode),
 			isEnd:    false,
 		},
+		homophoneMode: false,
+		pinyinArgs: pinyin.Args{
+			Style:     pinyin.Normal, // 不带声调的拼音
+			Separator: "",
+		},
 	}
 	return temp
 }
@@ -43,6 +52,22 @@ func (swc *SensitiveWordChecker) format(text string) string {
 	text = strings.ToLower(text)
 	text = strings.TrimSpace(strings.ToLower(text))
 	return text
+}
+
+// EnableHomophoneMode 启用谐音过滤模式
+func (swc *SensitiveWordChecker) EnableHomophoneMode() {
+	swc.homophoneMode = true
+}
+
+// DisableHomophoneMode 禁用谐音过滤模式
+func (swc *SensitiveWordChecker) DisableHomophoneMode() {
+	swc.homophoneMode = false
+}
+
+// textToPinyin 将文本转换为拼音字符串
+func (swc *SensitiveWordChecker) textToPinyin(text string) string {
+	py := pinyin.LazyConvert(text, &swc.pinyinArgs)
+	return strings.Join(py, "")
 }
 
 // Insert 添加敏感词到字典树
@@ -63,6 +88,33 @@ func (swc *SensitiveWordChecker) Insert(word string) {
 		node = node.children[char]
 	}
 	node.isEnd = true
+
+	// 如果启用了谐音模式，同时插入拼音形式
+	if swc.homophoneMode {
+		swc.insertPinyin(word)
+	}
+}
+
+// insertPinyin 插入词的拼音形式（用于谐音匹配）
+func (swc *SensitiveWordChecker) insertPinyin(word string) {
+	pinyinStr := swc.textToPinyin(word)
+	if pinyinStr == "" {
+		return
+	}
+
+	node := swc.root
+	for _, char := range pinyinStr {
+		if _, exists := node.children[char]; !exists {
+			node.children[char] = &TrieNode{
+				children:    make(map[rune]*TrieNode),
+				isEnd:       false,
+				isHomophone: true,
+			}
+		}
+		node = node.children[char]
+	}
+	node.isEnd = true
+	node.isHomophone = true
 }
 
 // 热重载文件
@@ -102,6 +154,7 @@ func (swc *SensitiveWordChecker) Contains(text string) bool {
 	text = swc.format(text)
 	runes := []rune(text)
 
+	// 首先检查原文本
 	for i := 0; i < len(runes); i++ {
 		node := swc.root
 		j := i
@@ -120,6 +173,30 @@ func (swc *SensitiveWordChecker) Contains(text string) bool {
 		}
 	}
 
+	// 如果启用了谐音模式，同时检查拼音形式
+	if swc.homophoneMode {
+		pinyinText := swc.textToPinyin(text)
+		pinyinRunes := []rune(pinyinText)
+
+		for i := 0; i < len(pinyinRunes); i++ {
+			node := swc.root
+			j := i
+
+			for j < len(pinyinRunes) {
+				char := pinyinRunes[j]
+				if child, exists := node.children[char]; exists {
+					node = child
+					if node.isEnd && node.isHomophone {
+						return true
+					}
+					j++
+				} else {
+					break
+				}
+			}
+		}
+	}
+
 	return false
 }
 
@@ -129,6 +206,7 @@ func (swc *SensitiveWordChecker) FindAll(text string) []string {
 	text = swc.format(text)
 	runes := []rune(text)
 
+	// 查找原文本中的敏感词
 	for i := 0; i < len(runes); i++ {
 		node := swc.root
 		j := i
@@ -139,13 +217,41 @@ func (swc *SensitiveWordChecker) FindAll(text string) []string {
 			if child, exists := node.children[char]; exists {
 				node = child
 				matchedRunes = append(matchedRunes, char)
-				if node.isEnd {
+				if node.isEnd && !node.isHomophone {
 					foundWords = append(foundWords, string(matchedRunes))
 					break
 				}
 				j++
 			} else {
 				break
+			}
+		}
+	}
+
+	// 如果启用了谐音模式，同时查找拼音形式的匹配
+	if swc.homophoneMode {
+		pinyinText := swc.textToPinyin(text)
+		pinyinRunes := []rune(pinyinText)
+
+		for i := 0; i < len(pinyinRunes); i++ {
+			node := swc.root
+			j := i
+			var matchedRunes []rune
+
+			for j < len(pinyinRunes) {
+				char := pinyinRunes[j]
+				if child, exists := node.children[char]; exists {
+					node = child
+					matchedRunes = append(matchedRunes, char)
+					if node.isEnd && node.isHomophone {
+						// 记录检测到谐音匹配
+						foundWords = append(foundWords, string(matchedRunes))
+						break
+					}
+					j++
+				} else {
+					break
+				}
 			}
 		}
 	}
@@ -179,42 +285,15 @@ func (swc *SensitiveWordChecker) LoadFromFileByLine(filepath string) error {
 
 // Replace 敏感词替换，将敏感词替换为指定字符
 func (swc *SensitiveWordChecker) Replace(text string, replacement rune) string {
-	runes := []rune(text)
-	textLen := len(runes)
-	i := 0
-
-	for i < textLen {
-		node := swc.root
-		j := i
-		matchStart := i
-		var matchedRunes []rune
-
-		for j < textLen {
-			char := unicode.ToLower(runes[j])
-			if child, exists := node.children[char]; exists {
-				node = child
-				matchedRunes = append(matchedRunes, runes[j])
-				if node.isEnd {
-					// 找到敏感词，进行替换
-					for k := matchStart; k < j+1; k++ {
-						runes[k] = replacement
-					}
-					i = j + 1
-					break
-				}
-				j++
-			} else {
-				i++
-				break
-			}
-		}
-
-		if j >= textLen {
-			i++
-		}
+	fs := swc.FindAll(text)
+	if len(fs) == 0 {
+		return text
 	}
-
-	return string(runes)
+	//循环敏感词
+	for _, f := range fs {
+		text = strings.ReplaceAll(text, f, strings.Repeat(string(replacement), len(f)))
+	}
+	return text
 }
 
 // LoadFromTextFile 从文本文件中加载敏感词库,监察库中的内容有变化时，重新加载
