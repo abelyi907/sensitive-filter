@@ -303,7 +303,7 @@ func main() {
 
 ## 许可证
 
-MIT License (LICENSE)
+[MIT License](LICENSE)
 
 ## 贡献
 
