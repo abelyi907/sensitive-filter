@@ -60,8 +60,9 @@ func TestHomophoneFilter(t *testing.T) {
 	t.Logf("找到的敏感词: %v", words)
 
 	// 测试4: 替换敏感词和谐音词
-	replaced := checker.Replace("不要暴力和睹博", '*')
-	if replaced != "不要**和**" {
+	replaced := checker.Replace("不要暴力和睹博,对baoli", '*')
+	t.Log("==>", replaced)
+	if replaced != "不要**和**,对*****" {
 		t.Fatal("替换谐音敏感词失败")
 	}
 
@@ -90,9 +91,9 @@ func TestMultipleHomophones(t *testing.T) {
 		text     string
 		expected bool
 	}{
-		{"这是武器", true},    // 原文
-		{"这是武气", true},    // 谐音
-		{"这是五器", true},    // 谐音
+		{"这是武器", true},   // 原文
+		{"这是武气", true},   // 谐音
+		{"这是五器", true},   // 谐音
 		{"这是无害的", false}, // 不相关
 	}
 

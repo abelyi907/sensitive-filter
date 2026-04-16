@@ -328,7 +328,7 @@ func (swc *SensitiveWordChecker) Replace(text string, replacement rune) string {
 	// 记录需要替换的位置
 	replacePositions := make(map[int]bool)
 
-	// 首先查找原文本中的敏感词
+	// 首先查找原文本中的敏感词（包括中文和拼音）
 	for i := 0; i < textLen; i++ {
 		node := swc.root
 		j := i
@@ -338,8 +338,9 @@ func (swc *SensitiveWordChecker) Replace(text string, replacement rune) string {
 			char := runes[j]
 			if child, exists := node.children[char]; exists {
 				node = child
-				if node.isEnd && !node.isHomophone {
-					// 找到敏感词，记录需要替换的位置
+				// 匹配到敏感词（无论是原文还是拼音形式）
+				if node.isEnd {
+					// 记录需要替换的位置
 					for k := matchStart; k <= j; k++ {
 						replacePositions[k] = true
 					}
@@ -352,7 +353,7 @@ func (swc *SensitiveWordChecker) Replace(text string, replacement rune) string {
 		}
 	}
 
-	// 如果启用了谐音模式，同时查找拼音形式的匹配
+	// 如果启用了谐音模式，同时将中文转换为拼音后查找匹配
 	if swc.homophoneMode {
 		pinyinText, positionMap := swc.textToPinyinWithMapping(text)
 		pinyinRunes := []rune(pinyinText)
