@@ -9,7 +9,7 @@
 - ✅ 新增 `EnableHomophoneMode()` 方法启用谐音模式
 - ✅ 新增 `DisableHomophoneMode()` 方法禁用谐音模式
 - ✅ 增强 `Contains()` 方法支持谐音检测
-- ✅ 增强 `FindAll()` 方法支持查找谐音词(标记为 `[谐音]` 前缀)
+- ✅ 增强 `FindAll()` 方法支持查找谐音词
 - ✅ 增强 `Replace()` 方法支持替换谐音词
 - ✅ 在 TrieNode 中添加 `isHomophone` 标记区分原文和谐音
 - ✅ 添加 `textToPinyin()` 内部方法用于中文转拼音

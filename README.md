@@ -84,7 +84,7 @@ func main() {
     
     // 查找所有敏感词（包括谐音）
     words := checker.FindAll("这里有暴力和睹博行为")
-    fmt.Println(words)  // ["暴力", "[谐音]dubo"]
+    fmt.Println(words)  // ["暴力", "dubo"]
     
     // 替换敏感词和谐音词
     replaced := checker.Replace("不要暴力和睹博", '*')
