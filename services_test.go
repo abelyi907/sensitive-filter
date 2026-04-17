@@ -1,7 +1,9 @@
 package sensitive_filter
 
 import (
+	"os"
 	"testing"
+	"time"
 )
 
 func implodeStr(arr []string) string {
@@ -16,6 +18,35 @@ func implodeStr(arr []string) string {
 		result += arr[i]
 	}
 	return result
+}
+
+// 追加一行到文件
+func appendLine(filename, text string) error {
+	f, err := os.OpenFile(filename, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	_, err = f.WriteString("\n" + text)
+	return err
+}
+
+func TestReload(t *testing.T) {
+	checker := SensitiveChecker.New()
+	checker.LoadFromTextFile("words.txt")
+	if checker.Contains("测试非词") {
+		t.Fatal("报错，不应该检测到敏感词")
+	}
+
+	_ = appendLine("words.txt", "测试非词")
+	time.Sleep(time.Second * 3)
+	//向words.txt文件中添加敏感词"测试敏感词"，然后等待2秒钟，测试是否能够检测到新添加的敏感词
+
+	if !checker.Contains("测试非词") {
+		t.Fatal("重新加载敏感词失败")
+	}
+
 }
 
 // 测试谐音过滤功能
@@ -409,7 +440,7 @@ func TestHomophonePerformance(t *testing.T) {
 // 测试火星文过滤功能
 func TestMartianFilter(t *testing.T) {
 	checker := SensitiveChecker.New()
-	
+
 	// 插入敏感词
 	checker.Insert("不要")
 	checker.Insert("暴力")
@@ -417,48 +448,48 @@ func TestMartianFilter(t *testing.T) {
 	checker.Insert("知道")
 	checker.Insert("什么")
 	checker.Insert("没有")
-	
+
 	// 测试1: 检测单字火星文
 	t.Log("=== 测试单字火星文 ===")
 	testCases1 := []struct {
 		text     string
 		expected bool
 	}{
-		{"卜要", true},       // "卜"->"不"，"不要"是敏感词
-		{"滴暴力", true},     // "滴"->"的"，"的暴力"中包含"暴力"
-		{"莪喜欢", true},     // "莪"->"我"，"我喜欢"中包含"喜欢"
-		{"造了", true},       // "造"->"知道"，"知道了"中包含"知道"
-		{"神马", true},       // "神马"->"什么"，"什么"是敏感词
-		{"木有", true},       // "木有"->"没有"，"没有"是敏感词
-		{"正常文字", false},   // 不包含任何敏感词
+		{"卜要", true},    // "卜"->"不"，"不要"是敏感词
+		{"滴暴力", true},   // "滴"->"的"，"的暴力"中包含"暴力"
+		{"莪喜欢", true},   // "莪"->"我"，"我喜欢"中包含"喜欢"
+		{"造了", true},    // "造"->"知道"，"知道了"中包含"知道"
+		{"神马", true},    // "神马"->"什么"，"什么"是敏感词
+		{"木有", true},    // "木有"->"没有"，"没有"是敏感词
+		{"正常文字", false}, // 不包含任何敏感词
 	}
-	
+
 	for _, tc := range testCases1 {
 		result := checker.Contains(tc.text)
 		if result != tc.expected {
 			t.Errorf("文本 '%s' 期望 %v, 实际 %v", tc.text, tc.expected, result)
 		}
 	}
-	
+
 	// 测试2: 检测词语火星文
 	t.Log("=== 测试词语火星文 ===")
 	testCases2 := []struct {
 		text     string
 		expected bool
 	}{
-		{"稀饭你", true},      // "喜欢" -> "稀饭"，"喜欢"是敏感词
-		{"酱紫啊", false},     // "这样子" -> "酱紫"，但"这样子"不是敏感词
-		{"灰常好", false},     // "非常" 不在敏感词中
-		{"童鞋们", false},     // "同学" 不在敏感词中
+		{"稀饭你", true},  // "喜欢" -> "稀饭"，"喜欢"是敏感词
+		{"酱紫啊", false}, // "这样子" -> "酱紫"，但"这样子"不是敏感词
+		{"灰常好", false}, // "非常" 不在敏感词中
+		{"童鞋们", false}, // "同学" 不在敏感词中
 	}
-	
+
 	for _, tc := range testCases2 {
 		result := checker.Contains(tc.text)
 		if result != tc.expected {
 			t.Errorf("文本 '%s' 期望 %v, 实际 %v", tc.text, tc.expected, result)
 		}
 	}
-	
+
 	// 测试3: 查找火星文
 	t.Log("=== 测试查找火星文 ===")
 	words := checker.FindAll("卜要暴力，莪稀饭神马")
@@ -466,7 +497,7 @@ func TestMartianFilter(t *testing.T) {
 		t.Error("查找火星文失败")
 	}
 	t.Logf("找到的词: %v", words)
-	
+
 	// 测试4: 替换火星文
 	t.Log("=== 测试替换火星文 ===")
 	replaced := checker.Replace("卜要暴力，莪稀饭神马", '*')
@@ -474,27 +505,27 @@ func TestMartianFilter(t *testing.T) {
 	if replaced == "" {
 		t.Error("替换火星文失败")
 	}
-	
+
 	// 测试5: 禁用火星文模式
 	t.Log("=== 测试禁用火星文模式 ===")
 	checker.DisableMartianMode()
 	if checker.Contains("卜要") {
 		t.Error("禁用火星文模式后仍检测到火星文")
 	}
-	
+
 	// 重新启用
 	checker.EnableMartianMode()
 	if !checker.Contains("卜要") {
 		t.Error("启用火星文模式后应该检测到火星文")
 	}
-	
+
 	// 测试6: 火星文+变形词组合
 	t.Log("=== 测试火星文+变形词组合 ===")
 	checker.Insert("赌博")
 	if !checker.Contains("睹-博") {
 		t.Error("检测谐音+变形词失败")
 	}
-	
+
 	// 测试7: 火星文+谐音组合
 	t.Log("=== 测试火星文+谐音组合 ===")
 	if !checker.Contains("卜要dubo") {
@@ -518,7 +549,7 @@ func TestNormalizeMartian(t *testing.T) {
 		{"3Q", "谢谢"},
 		{"88", "拜拜"},
 	}
-	
+
 	for _, tc := range testCases {
 		result := normalizeMartian(tc.input)
 		if result != tc.expected {
@@ -530,14 +561,14 @@ func TestNormalizeMartian(t *testing.T) {
 // 测试火星文性能
 func TestMartianPerformance(t *testing.T) {
 	checker := SensitiveChecker.New()
-	
+
 	// 插入敏感词
 	for i := 0; i < 100; i++ {
 		checker.Insert("敏感词" + string(rune('A'+i%26)))
 	}
-	
+
 	testText := "这是一段测试文本，包含卜要、滴、莪等火星文"
-	
+
 	// 执行多次检测
 	for i := 0; i < 1000; i++ {
 		checker.Contains(testText)
@@ -549,24 +580,24 @@ func TestCustomMartianMapping(t *testing.T) {
 	// 添加自定义映射
 	AddMartianMapping("偶滴", "我的")
 	AddMartianMapping("表酱紫", "不要这样子")
-	
+
 	// 验证映射已添加
 	mappings := GetMartianMappings()
 	if mappings["偶滴"] != "我的" {
 		t.Error("自定义火星文映射添加失败")
 	}
-	
+
 	// 测试标准化
 	result := normalizeMartian("偶滴神马")
 	if result != "我的什么" {
 		t.Errorf("期望 '我的什么', 实际 '%s'", result)
 	}
-	
+
 	result = normalizeMartian("表酱紫")
 	if result != "不要这样子" {
 		t.Errorf("期望 '不要这样子', 实际 '%s'", result)
 	}
-	
+
 	// 移除映射
 	RemoveMartianMapping("偶滴")
 	mappings = GetMartianMappings()
