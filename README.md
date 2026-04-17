@@ -11,6 +11,7 @@
 - ✅ **大小写不敏感**：自动将文本转换为小写进行匹配
 - ✅ **中文支持**：完美支持中文、英文及其他 Unicode 字符
 - ✅ **谐音过滤**：支持基于拼音的谐音词检测，有效识别同音字变体
+- ✅ **变形词过滤**：智能识别被特殊字符分隔的变形敏感词（如"暴-力"、"赌_博","暴-li"）
 
 ## 安装
 
@@ -96,6 +97,47 @@ func main() {
 }
 ```
 
+### 变形词过滤功能
+
+启用变形词过滤模式后，系统会自动识别并处理被特殊字符分隔的敏感词：
+
+```go
+package main
+
+import (
+    "fmt"
+	filter "github.com/abelyi907/sensitive-filter"
+)
+
+func main() {
+    checker := filter.SensitiveChecker.New()
+    
+    // 变形词模式默认已启用
+    checker.EnableDeformMode()
+    
+    // 添加敏感词
+    checker.Insert("暴力")
+    checker.Insert("赌博")
+    
+    // 检测带分隔符的变形词
+    fmt.Println(checker.Contains("暴-力"))      // true - 检测到变形词
+    fmt.Println(checker.Contains("赌_博"))      // true - 检测到变形词
+    fmt.Println(checker.Contains("暴.力"))      // true - 检测到变形词
+    
+    // 替换变形词（保留分隔符位置）
+    replaced := checker.Replace("不要暴-力和睹-博", '*')
+    fmt.Println(replaced)  // "不要***和***"
+    
+    // 禁用变形词模式
+    checker.DisableDeformMode()
+    fmt.Println(checker.Contains("暴-力"))  // false - 不再检测变形词
+    fmt.Println(checker.Contains("暴力"))   // true - 仍能检测正常词
+}
+```
+
+**支持的分隔符：**
+`- _ . ~ @ # $ % ^ & * ( ) [ ] { } | \ / < > , ; : ' " ` 空格等
+
 ### API 说明
 
 #### 1. 创建检查器实例
@@ -134,21 +176,31 @@ checker.EnableHomophoneMode()
 checker.DisableHomophoneMode()
 ```
 
-#### 5. 检测文本是否包含敏感词
+#### 5. 启用/禁用变形词过滤模式
+
+```go
+// 启用变形词模式（自动检测被分隔符分隔的敏感词）
+checker.EnableDeformMode()
+
+// 禁用变形词模式
+checker.DisableDeformMode()
+```
+
+#### 6. 检测文本是否包含敏感词
 
 ```go
 contains := checker.Contains("这段文本包含敏感词")
 // 返回：true 或 false
 ```
 
-#### 6. 查找文本中的所有敏感词
+#### 7. 查找文本中的所有敏感词
 
 ```go
 words := checker.FindAll("这段文本包含多个敏感词和违禁词")
 // 返回：["敏感词", "违禁词"]
 ```
 
-#### 7. 替换敏感词
+#### 8. 替换敏感词
 
 ```go
 replaced := checker.Replace("这段文本包含敏感词", '*')
@@ -194,6 +246,36 @@ checker.Contains("民感内容")  // true - 谐音匹配 (min gan)
 - 谐音模式会增加内存占用（存储拼音形式）
 - 可能会产生误报（同音但不同义的词）
 - 建议根据实际场景选择是否启用
+
+### 🔧 变形词过滤
+
+启用变形词过滤模式后，系统会智能识别被特殊字符分隔的敏感词变体。
+
+**工作原理：**
+1. 检测前移除常见分隔符（如 `-`、`_`、`.` 等）
+2. 在清理后的文本中进行敏感词匹配
+3. 通过位置映射确保替换时正确处理原文中的分隔符
+
+**使用示例：**
+```go
+checker.EnableDeformMode()
+checker.Insert("暴力")
+
+// 以下都会检测到
+checker.Contains("暴力")     // true - 正常匹配
+checker.Contains("暴-力")    // true - 变形词匹配
+checker.Contains("暴_力")    // true - 变形词匹配
+checker.Contains("暴.力")    // true - 变形词匹配
+
+// 替换时会保留分隔符位置的标记
+replaced := checker.Replace("暴-力内容", '*')
+// 返回："**-**容" （分隔符位置也被替换）
+```
+
+**注意事项：**
+- 变形词模式会忽略常见分隔符进行匹配
+- 替换时会同时替换敏感词字符和分隔符
+- 可根据需要启用或禁用此功能
 
 ### 📝 文件格式要求
 
@@ -244,6 +326,7 @@ sensitive-filter/
 3. **文件路径**：使用 Windows 路径时，注意使用正斜杠 `/` 或双反斜杠 `\\`
 4. **热重载延迟**：文件监控有 2 秒的检测间隔，修改文件后最多 2 秒内生效
 5. **谐音模式**：启用谐音模式会增加内存占用和可能的误报，建议根据实际需求选择
+6. **变形词模式**：启用变形词模式可以检测被特殊字符分隔的敏感词，但可能会影响性能
 
 ## 示例代码
 

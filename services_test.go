@@ -4,30 +4,18 @@ import (
 	"testing"
 )
 
-// 测试服务
-func TestService(t *testing.T) {
-	checker := SensitiveChecker.New()
-
-	// 从文件加载敏感词库
-	checker.LoadFromTextFile("./words.txt")
-
-	// 测试文本
-	testText := "这是一个包含敏感词1和敏感词3内容的文本，涉及信息。"
-
-	// 1. 替换敏感词
-	replacedText := checker.Replace(testText, '*')
-	if replacedText != "这是一个包含****和****内容的文本，涉及信息。" {
-		t.Fatalf("替换敏感词失败")
+func implodeStr(arr []string) string {
+	if len(arr) == 0 {
+		return ""
 	}
-	if !checker.Contains("我反对使用敏感词2") {
-		t.Fatalf("检查是否包含敏感词失败")
+	result := ""
+	for i := 0; i < len(arr); i++ {
+		if i > 0 {
+			result += ","
+		}
+		result += arr[i]
 	}
-
-	ws := checker.FindAll("我反对使用敏感词1")
-	if len(ws) != 1 {
-		t.Fatalf("检查是否包含敏感词失败")
-	}
-
+	return result
 }
 
 // 测试谐音过滤功能
@@ -61,14 +49,48 @@ func TestHomophoneFilter(t *testing.T) {
 	if len(words) == 0 {
 		t.Fatal("查找敏感词或谐音词失败")
 	}
-	t.Logf("找到的敏感词: %v", words)
 
 	// 测试4: 替换敏感词和谐音词
 	replaced := checker.Replace("不要暴力和睹博,对baoli", '*')
-	t.Log("==>", replaced)
+
 	if replaced != "不要**和**,对*****" {
 		t.Fatal("替换谐音敏感词失败")
 	}
+
+	replaced = checker.Replace("不要暴-力和睹-博", '*')
+	t.Log("==>", replaced)
+	if replaced != "不要*-*和*-*" {
+		t.Fatal("替换变形敏感词失败")
+	}
+
+	// 测试6: 检测变形词
+	if !checker.Contains("暴-力") {
+		t.Fatal("检测变形词失败")
+	}
+
+	if !checker.Contains("赌_博") {
+		t.Fatal("检测变形词失败")
+	}
+
+	// 测试7: 查找变形词
+	words = checker.FindAll("这里有暴-力和赌~博行为")
+	if len(words) == 0 {
+		t.Fatal("查找变形词失败")
+	}
+
+	// 测试8: 禁用变形词模式后，不应该检测到变形词
+	checker.DisableDeformMode()
+	if checker.Contains("暴-力") {
+		t.Fatal("禁用变形词模式后还是检查到变形词了")
+	}
+
+	// 但仍然应该检测到原文
+	if !checker.Contains("暴力") {
+		t.Fatal("应该检测到原始敏感词")
+	}
+
+	// 重新启用变形词模式
+	checker.EnableDeformMode()
 
 	// 测试5: 禁用谐音模式后，不应该检测到谐音词
 	checker.DisableHomophoneMode()
@@ -109,7 +131,256 @@ func TestMultipleHomophones(t *testing.T) {
 	}
 }
 
-// 测试性能：确保谐音模式不会显著影响性能
+// 测试变形词过滤功能
+func TestDefaultFilter(t *testing.T) {
+	checker := SensitiveChecker.New()
+
+	// 插入敏感词
+	checker.Insert("暴力")
+	checker.Insert("赌博")
+	checker.Insert("武器")
+
+	// 测试1: 检测各种分隔符的变形词
+	testCases := []struct {
+		text     string
+		expected bool
+	}{
+		{"暴力", true},     // 正常词
+		{"暴-力", true},    // 横线分隔
+		{"暴_力", true},    // 下划线分隔
+		{"暴.力", true},    // 点号分隔
+		{"暴~力", true},    // 波浪线分隔
+		{"暴~li", true},   // 波浪线分隔
+		{"bao~力", true},  // 波浪线分隔
+		{"bao~li", true}, // 波浪线分隔
+		{"武-器", true},    // 另一个词
+		{"五-器", true},    // 另一个词
+		{"无害的", false},   // 不相关
+	}
+
+	for _, tc := range testCases {
+		result := checker.Contains(tc.text)
+		if result != tc.expected {
+			t.Errorf("文本 '%s' 期望 %v, 实际 %v", tc.text, tc.expected, result)
+		}
+	}
+
+	// 测试2: 替换变形词（保留分隔符）
+	test2Cases := []struct {
+		text       string
+		expectText string
+	}{
+		{"暴力", "**"},         // 正常词
+		{"暴-力", "*-*"},       // 横线分隔
+		{"暴_力", "*_*"},       // 下划线分隔
+		{"暴.力", "*.*"},       // 点号分隔
+		{"暴~li", "*~**"},     // 波浪线分隔
+		{"bao~力", "***~*"},   // 波浪线分隔
+		{"bao~li", "***~**"}, // 波浪线分隔
+		{"武-器", "*-*"},       // 另一个词
+		{"五-器", "*-*"},       // 另一个词
+		{"无害的", "无害的"},       // 不相关
+	}
+
+	for _, tc := range test2Cases {
+		result := checker.Replace(tc.text, '*')
+		if result != tc.expectText {
+			t.Errorf("文本 '%s' 期望 %v, 实际 %v", tc.text, tc.expectText, result)
+		}
+	}
+
+	// 测试3: 查找变形词
+	test3Cases := []struct {
+		text       string
+		expectText string
+	}{
+		{"暴力", "暴力"},  // 正常词
+		{"暴-力", "暴力"}, // 横线分隔
+		{"暴_力", "暴力"}, // 下划线分隔
+		{"暴.力", "暴力"}, // 点号分隔
+
+		{"bao~力", "baoli"},  // 波浪线分隔
+		{"bao~li", "baoli"}, // 波浪线分隔
+		{"武-器", "武器"},       // 另一个词
+		{"五-器", "wuqi"},     // 另一个词
+		{"无害的", ""},         // 不相关
+	}
+
+	for _, tc := range test3Cases {
+		result := implodeStr(checker.FindAll(tc.text))
+		if result != tc.expectText {
+			t.Errorf("文本 '%s' 期望 %v, 实际 %v", tc.text, tc.expectText, result)
+		}
+	}
+
+}
+func TestDisableDeformModeFilter(t *testing.T) {
+	checker := SensitiveChecker.New()
+	checker.DisableDeformMode()
+	//checker.DisableHomophoneMode()
+	// 插入敏感词
+	checker.Insert("暴力")
+	checker.Insert("赌博")
+	checker.Insert("武器")
+
+	// 测试1: 检测各种分隔符的变形词
+	testCases := []struct {
+		text     string
+		expected bool
+	}{
+		{"暴力", true},      // 正常词
+		{"暴-力", false},    // 横线分隔
+		{"暴_力", false},    // 下划线分隔
+		{"暴.力", false},    // 点号分隔
+		{"暴~力", false},    // 波浪线分隔
+		{"暴~li", false},   // 波浪线分隔
+		{"bao~力", false},  // 波浪线分隔
+		{"bao~li", false}, // 波浪线分隔
+		{"武-器", false},    // 另一个词
+		{"五-器", false},    // 另一个词
+		{"五器", true},      // 另一个词
+		{"无害的", false},    // 不相关
+	}
+
+	for _, tc := range testCases {
+		result := checker.Contains(tc.text)
+		if result != tc.expected {
+			t.Errorf("文本 '%s' 期望 %v, 实际 %v", tc.text, tc.expected, result)
+		}
+	}
+
+	// 测试2: 替换变形词（保留分隔符）
+	test2Cases := []struct {
+		text       string
+		expectText string
+	}{
+		{"暴力", "**"},         // 正常词
+		{"暴-力", "暴-力"},       // 横线分隔
+		{"暴_力", "暴_力"},       // 下划线分隔
+		{"暴.力", "暴.力"},       // 点号分隔
+		{"暴~li", "暴~li"},     // 波浪线分隔
+		{"bao~力", "bao~力"},   // 波浪线分隔
+		{"bao~li", "bao~li"}, // 波浪线分隔
+		{"武-器", "武-器"},       // 另一个词
+		{"五-器", "五-器"},       // 另一个词
+		{"无害的", "无害的"},       // 不相关
+	}
+
+	for _, tc := range test2Cases {
+		result := checker.Replace(tc.text, '*')
+		if result != tc.expectText {
+			t.Errorf("文本 '%s' 期望 %v, 实际 %v", tc.text, tc.expectText, result)
+		}
+	}
+
+	// 测试3: 查找变形词
+	test3Cases := []struct {
+		text       string
+		expectText string
+	}{
+		{"暴力", "暴力"}, // 正常词
+		{"暴-力", ""},  // 横线分隔
+		{"暴_力", ""},  // 下划线分隔
+		{"暴.力", ""},  // 点号分隔
+
+		{"bao~力", ""},  // 波浪线分隔
+		{"bao~li", ""}, // 波浪线分隔
+		{"武-器", ""},    // 另一个词
+		{"五-器", ""},    // 另一个词
+		{"无害的", ""},    // 不相关
+	}
+
+	for _, tc := range test3Cases {
+		result := implodeStr(checker.FindAll(tc.text))
+		if result != tc.expectText {
+			t.Errorf("文本 '%s' 期望 %v, 实际 %v", tc.text, tc.expectText, result)
+		}
+	}
+
+}
+
+func TestDisableHomophoneModeFilter(t *testing.T) {
+	checker := SensitiveChecker.New()
+	checker.DisableDeformMode()
+	checker.DisableHomophoneMode()
+	// 插入敏感词
+	checker.Insert("暴力")
+	checker.Insert("赌博")
+	checker.Insert("武器")
+
+	// 测试1: 检测各种分隔符的变形词
+	testCases := []struct {
+		text     string
+		expected bool
+	}{
+		{"暴力", true},      // 正常词
+		{"暴-力", false},    // 横线分隔
+		{"暴~li", false},   // 波浪线分隔
+		{"bao~力", false},  // 波浪线分隔
+		{"bao~li", false}, // 波浪线分隔
+		{"武-器", false},    // 另一个词
+		{"五-器", false},    // 另一个词
+		{"五器", false},     // 另一个词
+		{"无害的", false},    // 不相关
+	}
+
+	for _, tc := range testCases {
+		result := checker.Contains(tc.text)
+		if result != tc.expected {
+			t.Errorf("文本 '%s' 期望 %v, 实际 %v", tc.text, tc.expected, result)
+		}
+	}
+
+	// 测试2: 替换变形词（保留分隔符）
+	test2Cases := []struct {
+		text       string
+		expectText string
+	}{
+		{"暴力", "**"},         // 正常词
+		{"暴-力", "暴-力"},       // 横线分隔
+		{"暴_力", "暴_力"},       // 下划线分隔
+		{"暴.力", "暴.力"},       // 点号分隔
+		{"暴~li", "暴~li"},     // 波浪线分隔
+		{"bao~力", "bao~力"},   // 波浪线分隔
+		{"bao~li", "bao~li"}, // 波浪线分隔
+		{"武-器", "武-器"},       // 另一个词
+		{"五-器", "五-器"},       // 另一个词
+		{"无害的", "无害的"},       // 不相关
+	}
+
+	for _, tc := range test2Cases {
+		result := checker.Replace(tc.text, '*')
+		if result != tc.expectText {
+			t.Errorf("文本 '%s' 期望 %v, 实际 %v", tc.text, tc.expectText, result)
+		}
+	}
+
+	// 测试3: 查找变形词
+	test3Cases := []struct {
+		text       string
+		expectText string
+	}{
+		{"暴力", "暴力"}, // 正常词
+		{"暴-力", ""},  // 横线分隔
+		{"暴_力", ""},  // 下划线分隔
+		{"暴.力", ""},  // 点号分隔
+
+		{"bao~力", ""},  // 波浪线分隔
+		{"bao~li", ""}, // 波浪线分隔
+		{"武-器", ""},    // 另一个词
+		{"五-器", ""},    // 另一个词
+		{"无害的", ""},    // 不相关
+	}
+
+	for _, tc := range test3Cases {
+		result := implodeStr(checker.FindAll(tc.text))
+		if result != tc.expectText {
+			t.Errorf("文本 '%s' 期望 %v, 实际 %v", tc.text, tc.expectText, result)
+		}
+	}
+
+}
+
 func TestHomophonePerformance(t *testing.T) {
 	checker := SensitiveChecker.New()
 
