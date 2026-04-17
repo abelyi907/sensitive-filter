@@ -107,15 +107,24 @@ func containsSeparator(text string) bool {
 	return false
 }
 
+// 常见分隔符集合（包级别常量，避免重复创建）
+var separatorSet = map[rune]bool{
+	'-': true, '_': true, '.': true, '~': true, '@': true,
+	'#': true, '$': true, '%': true, '^': true, '&': true,
+	'*': true, '(': true, ')': true, '[': true, ']': true,
+	'{': true, '}': true, '|': true, '\\': true, '/': true,
+	'<': true, '>': true, ',': true, ';': true, ':': true,
+	'\'': true, '"': true, '`': true, ' ': true,
+}
+
+// getSeparator 返回分隔符集合
 func getSeparator() map[rune]bool {
-	return map[rune]bool{
-		'-': true, '_': true, '.': true, '~': true, '@': true,
-		'#': true, '$': true, '%': true, '^': true, '&': true,
-		'*': true, '(': true, ')': true, '[': true, ']': true,
-		'{': true, '}': true, '|': true, '\\': true, '/': true,
-		'<': true, '>': true, ',': true, ';': true, ':': true,
-		'\'': true, '"': true, '`': true, ' ': true,
-	}
+	return separatorSet
+}
+
+// isChinese 判断字符是否为中文字符
+func isChinese(char rune) bool {
+	return char >= '\u4e00' && char <= '\u9fff'
 }
 
 // textToPinyin 将文本转换为拼音字符串
@@ -128,7 +137,7 @@ func (swc *SensitiveWordChecker) textToPinyin(text string) string {
 
 	for _, char := range runes {
 		// 判断是否为中文字符
-		if char >= '\u4e00' && char <= '\u9fff' {
+		if isChinese(char) {
 			// 中文字符，使用拼音
 			if pyIndex < len(pinyinParts) {
 				result.WriteString(pinyinParts[pyIndex])
@@ -155,7 +164,7 @@ func (swc *SensitiveWordChecker) textToPinyinWithMapping(text string) (string, [
 
 	for i, char := range runes {
 		// 判断是否为中文字符
-		if char >= '\u4e00' && char <= '\u9fff' {
+		if isChinese(char) {
 			// 中文字符，使用拼音
 			if pyIndex < len(pinyinParts) {
 				py := pinyinParts[pyIndex]
@@ -204,7 +213,7 @@ func (swc *SensitiveWordChecker) Insert(word string) {
 // isPureChinese 检查字符串是否只包含中文字符
 func isPureChinese(s string) bool {
 	for _, r := range s {
-		if r < '\u4e00' || r > '\u9fff' {
+		if !isChinese(r) {
 			return false
 		}
 	}
@@ -275,19 +284,51 @@ func (swc *SensitiveWordChecker) Contains(text string) bool {
 		checkText, _ = swc.removeSeparators(text)
 	}
 
-	runes := []rune(checkText)
-
 	// 首先检查原文本
+	if len(swc.findMatchesInText(checkText)) > 0 {
+		return true
+	}
+
+	// 如果应该进行谐音匹配，检查拼音形式
+	if !swc.shouldSkipHomophone(text) {
+		pinyinText := swc.textToPinyin(checkText)
+		if len(swc.findHomophoneMatchesInPinyin(pinyinText)) > 0 {
+			return true
+		}
+	}
+
+	return false
+}
+
+// shouldSkipHomophone 判断是否应该跳过谐音匹配
+func (swc *SensitiveWordChecker) shouldSkipHomophone(originalText string) bool {
+	if !swc.homophoneMode {
+		return true
+	}
+	if !swc.deformMode && containsSeparator(originalText) {
+		return true
+	}
+	return false
+}
+
+// findMatchesInText 在文本中查找所有匹配的敏感词（原文匹配）
+func (swc *SensitiveWordChecker) findMatchesInText(text string) []string {
+	var matches []string
+	runes := []rune(text)
+
 	for i := 0; i < len(runes); i++ {
 		node := swc.root
 		j := i
+		var matchedRunes []rune
 
 		for j < len(runes) {
 			char := runes[j]
 			if child, exists := node.children[char]; exists {
 				node = child
-				if node.isEnd {
-					return true
+				matchedRunes = append(matchedRunes, char)
+				if node.isEnd && !node.isHomophone {
+					matches = append(matches, string(matchedRunes))
+					break
 				}
 				j++
 			} else {
@@ -296,42 +337,93 @@ func (swc *SensitiveWordChecker) Contains(text string) bool {
 		}
 	}
 
-	// 如果启用了谐音模式，同时检查拼音形式
-	// 但如果禁用了变形词模式且原文包含分隔符，则跳过谐音检查
-	if swc.homophoneMode {
-		// 检查是否需要跳过谐音匹配
-		skipHomophone := false
-		if !swc.deformMode {
-			// 如果原文包含分隔符，跳过谐音匹配
-			if containsSeparator(text) {
-				skipHomophone = true
-			}
-		}
+	return matches
+}
 
-		if !skipHomophone {
-			pinyinText := swc.textToPinyin(checkText)
-			pinyinRunes := []rune(pinyinText)
+// findMatchesWithPositions 在文本中查找所有匹配的敏感词及其位置（原文匹配）
+func (swc *SensitiveWordChecker) findMatchesWithPositions(text string) []struct {
+	word  string
+	start int
+	end   int
+} {
+	var matches []struct {
+		word  string
+		start int
+		end   int
+	}
+	runes := []rune(text)
 
-			for i := 0; i < len(pinyinRunes); i++ {
-				node := swc.root
-				j := i
+	for i := 0; i < len(runes); i++ {
+		node := swc.root
+		j := i
+		var matchedRunes []rune
 
-				for j < len(pinyinRunes) {
-					char := pinyinRunes[j]
-					if child, exists := node.children[char]; exists {
-						node = child
-						if node.isEnd && node.isHomophone {
-							return true
-						}
-						j++
-					} else {
-						break
-					}
+		for j < len(runes) {
+			char := runes[j]
+			if child, exists := node.children[char]; exists {
+				node = child
+				matchedRunes = append(matchedRunes, char)
+				if node.isEnd && !node.isHomophone {
+					matches = append(matches, struct {
+						word  string
+						start int
+						end   int
+					}{string(matchedRunes), i, j})
+					break
 				}
+				j++
+			} else {
+				break
 			}
 		}
 	}
 
+	return matches
+}
+
+// findHomophoneMatchesInPinyin 在拼音文本中查找谐音匹配
+func (swc *SensitiveWordChecker) findHomophoneMatchesInPinyin(pinyinText string) []string {
+	var matches []string
+	pinyinRunes := []rune(pinyinText)
+
+	for i := 0; i < len(pinyinRunes); i++ {
+		node := swc.root
+		j := i
+		var matchedRunes []rune
+
+		for j < len(pinyinRunes) {
+			char := pinyinRunes[j]
+			if child, exists := node.children[char]; exists {
+				node = child
+				matchedRunes = append(matchedRunes, char)
+				if node.isEnd && node.isHomophone {
+					matches = append(matches, string(matchedRunes))
+					break
+				}
+				j++
+			} else {
+				break
+			}
+		}
+	}
+
+	return matches
+}
+
+// markMatchedPositions 标记已匹配的位置范围
+func markMatchedPositions(positions map[int]bool, start, end int) {
+	for k := start; k <= end; k++ {
+		positions[k] = true
+	}
+}
+
+// hasPositionOverlap 检查位置范围是否与已标记位置重叠
+func hasPositionOverlap(positions map[int]bool, start, end int) bool {
+	for k := start; k <= end; k++ {
+		if positions[k] {
+			return true
+		}
+	}
 	return false
 }
 
@@ -346,88 +438,47 @@ func (swc *SensitiveWordChecker) FindAll(text string) []string {
 		checkText, _ = swc.removeSeparators(text)
 	}
 
-	runes := []rune(checkText)
-
 	// 记录已经找到的匹配位置，避免重复
 	matchedPositions := make(map[int]bool)
 
 	// 查找原文本中的敏感词
-	for i := 0; i < len(runes); i++ {
-		node := swc.root
-		j := i
-		var matchedRunes []rune
-
-		for j < len(runes) {
-			char := runes[j]
-			if child, exists := node.children[char]; exists {
-				node = child
-				matchedRunes = append(matchedRunes, char)
-				if node.isEnd && !node.isHomophone {
-					foundWords = append(foundWords, string(matchedRunes))
-					// 记录已匹配的位置
-					for k := i; k <= j; k++ {
-						matchedPositions[k] = true
-					}
-					break
-				}
-				j++
-			} else {
-				break
-			}
-		}
+	matches := swc.findMatchesWithPositions(checkText)
+	for _, match := range matches {
+		foundWords = append(foundWords, match.word)
+		markMatchedPositions(matchedPositions, match.start, match.end)
 	}
 
-	// 如果启用了谐音模式，同时查找拼音形式的匹配
-	// 但如果禁用了变形词模式且原文包含分隔符，则跳过谐音检查
-	if swc.homophoneMode {
-		skipHomophone := false
-		if !swc.deformMode {
-			if containsSeparator(text) {
-				skipHomophone = true
+	// 如果应该进行谐音匹配，查找拼音形式的匹配
+	if !swc.shouldSkipHomophone(text) {
+		pinyinText := swc.textToPinyin(checkText)
+		pinyinRunes := []rune(pinyinText)
+
+		for i := 0; i < len(pinyinRunes); i++ {
+			// 如果这个位置已经在原文匹配中被覆盖，跳过
+			if matchedPositions[i] {
+				continue
 			}
-		}
 
-		if !skipHomophone {
-			pinyinText := swc.textToPinyin(checkText)
-			pinyinRunes := []rune(pinyinText)
+			node := swc.root
+			j := i
+			var matchedRunes []rune
 
-			for i := 0; i < len(pinyinRunes); i++ {
-				// 如果这个位置已经在原文匹配中被覆盖，跳过
-				if matchedPositions[i] {
-					continue
-				}
-
-				node := swc.root
-				j := i
-				var matchedRunes []rune
-				for j < len(pinyinRunes) {
-					char := pinyinRunes[j]
-					if child, exists := node.children[char]; exists {
-						node = child
-						matchedRunes = append(matchedRunes, char)
-						if node.isEnd && node.isHomophone {
-							// 检查是否已经有原文匹配覆盖了这个范围
-							hasOverlap := false
-							for k := i; k <= j; k++ {
-								if matchedPositions[k] {
-									hasOverlap = true
-									break
-								}
-							}
-							if !hasOverlap {
-								// 记录检测到谐音匹配
-								foundWords = append(foundWords, string(matchedRunes))
-								// 标记这些位置已被占用
-								for k := i; k <= j; k++ {
-									matchedPositions[k] = true
-								}
-							}
-							break
+			for j < len(pinyinRunes) {
+				char := pinyinRunes[j]
+				if child, exists := node.children[char]; exists {
+					node = child
+					matchedRunes = append(matchedRunes, char)
+					if node.isEnd && node.isHomophone {
+						// 检查是否已经有原文匹配覆盖了这个范围
+						if !hasPositionOverlap(matchedPositions, i, j) {
+							foundWords = append(foundWords, string(matchedRunes))
+							markMatchedPositions(matchedPositions, i, j)
 						}
-						j++
-					} else {
 						break
 					}
+					j++
+				} else {
+					break
 				}
 			}
 		}
