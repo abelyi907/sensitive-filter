@@ -22,11 +22,20 @@ type TrieNode struct {
 	isHomophone bool // 标记是否为谐音词
 }
 
+// NewTrieNode 创建新的字典树节点
+func NewTrieNode() *TrieNode {
+	return &TrieNode{
+		children: make(map[rune]*TrieNode),
+		isEnd:    false,
+	}
+}
+
 // SensitiveWordChecker 敏感词检查器
 type SensitiveWordChecker struct {
 	root          *TrieNode
 	homophoneMode bool // 是否启用谐音模式
 	deformMode    bool // 是否启用变形词模式
+	martianMode   bool // 是否启用火星文模式
 	pinyinArgs    pinyin.Args
 }
 
@@ -34,25 +43,28 @@ var SensitiveChecker *SensitiveWordChecker
 
 // 创建新的敏感词检查器
 func (swc *SensitiveWordChecker) New() *SensitiveWordChecker {
-	temp := &SensitiveWordChecker{
-		root: &TrieNode{
-			children: make(map[rune]*TrieNode),
-			isEnd:    false,
-		},
+	return &SensitiveWordChecker{
+		root:          NewTrieNode(),
 		homophoneMode: true, // 默认启用谐音模式
 		deformMode:    true, // 默认启用变形词模式
+		martianMode:   true, // 默认启用火星文模式
 		pinyinArgs: pinyin.Args{
 			Style:     pinyin.Normal, // 不带声调的拼音
 			Separator: "",
 		},
 	}
-	return temp
 }
 
 // 统一对待处理文件进行处理
 func (swc *SensitiveWordChecker) format(text string) string {
 	text = strings.ToLower(text)
-	text = strings.TrimSpace(strings.ToLower(text))
+	text = strings.TrimSpace(text)
+
+	// 如果启用了火星文模式，进行标准化处理
+	if swc.martianMode {
+		text = normalizeMartian(text)
+	}
+
 	return text
 }
 
@@ -74,6 +86,38 @@ func (swc *SensitiveWordChecker) EnableDeformMode() {
 // DisableDeformMode 禁用变形词过滤模式
 func (swc *SensitiveWordChecker) DisableDeformMode() {
 	swc.deformMode = false
+}
+
+// EnableMartianMode 启用火星文过滤模式
+func (swc *SensitiveWordChecker) EnableMartianMode() {
+	swc.martianMode = true
+}
+
+// DisableMartianMode 禁用火星文过滤模式
+func (swc *SensitiveWordChecker) DisableMartianMode() {
+	swc.martianMode = false
+}
+
+// AddMartianMapping 添加自定义火星文映射
+// martian: 火星文形式
+// standard: 标准文字形式
+func AddMartianMapping(martian, standard string) {
+	martianMap[martian] = standard
+}
+
+// RemoveMartianMapping 移除火星文映射
+func RemoveMartianMapping(martian string) {
+	delete(martianMap, martian)
+}
+
+// GetMartianMappings 获取所有火星文映射（用于调试）
+func GetMartianMappings() map[string]string {
+	// 返回副本，避免外部修改
+	c := make(map[string]string)
+	for k, v := range martianMap {
+		c[k] = v
+	}
+	return c
 }
 
 // removeSeparators 移除文本中的分隔符，并返回清理后的文本和位置映射
@@ -117,9 +161,104 @@ var separatorSet = map[rune]bool{
 	'\'': true, '"': true, '`': true, ' ': true,
 }
 
+// 火星文映射表（火星文 -> 标准文字）
+// 包括：同音字、形近字、网络用语等
+var martianMap = map[string]string{
+	// 单字映射
+	"卜":  "不",
+	"8":  "不",
+	"滴":  "的",
+	"德":  "的",
+	"乐":  "了",
+	"啦":  "了",
+	"莪":  "我",
+	"偶":  "我",
+	"伱":  "你",
+	"祢":  "你",
+	"ta": "他",
+	"TA": "他",
+
+	// 词语映射
+	"稀饭":  "喜欢",
+	"神马":  "什么",
+	"虾米":  "什么",
+	"酱紫":  "这样子",
+	"表":   "不要",
+	"造":   "知道",
+	"晓得":  "知道",
+	"灰常":  "非常",
+	"粉":   "很",
+	"素":   "是",
+	"系":   "是",
+	"木有":  "没有",
+	"米有":  "没有",
+	"肿么":  "怎么",
+	"为神马": "为什么",
+	"童鞋":  "同学",
+	"淫":   "人",
+	"银":   "人",
+	"盆友":  "朋友",
+	"粑粑":  "爸爸",
+	"麻咪":  "妈妈",
+	"北鼻":  "baby",
+	"达令":  "darling",
+	"3Q":  "谢谢",
+	"thx": "谢谢",
+	"3ks": "谢谢",
+	"88":  "拜拜",
+	"白白":  "拜拜",
+	"安":   "晚安",
+	"早安":  "早上好",
+	"午安":  "中午好",
+}
+
 // getSeparator 返回分隔符集合
 func getSeparator() map[rune]bool {
 	return separatorSet
+}
+
+// normalizeMartian 将火星文转换为标准文字
+// 采用贪心算法，优先匹配最长词，时间复杂度 O(n)
+func normalizeMartian(text string) string {
+	if text == "" {
+		return text
+	}
+
+	var result strings.Builder
+	runes := []rune(text)
+	i := 0
+	runLen := len(runes)
+
+	for i < runLen {
+		matched := false
+
+		// 尝试匹配以当前字符开头的最长词语（从长到短，最多4 字）
+		for length := 4; length >= 2; length-- {
+			end := i + length
+			if end <= runLen {
+				subStr := string(runes[i:end])
+				if standard, exists := martianMap[subStr]; exists {
+					result.WriteString(standard)
+					i = end
+					matched = true
+					break
+				}
+			}
+		}
+
+		if !matched {
+			// 尝试匹配单字
+			char := string(runes[i])
+			if standard, exists := martianMap[char]; exists {
+				result.WriteString(standard)
+			} else {
+				result.WriteRune(runes[i])
+			}
+			i++
+		}
+	}
+
+	return result.String()
 }
 
 // isChinese 判断字符是否为中文字符
@@ -187,27 +326,37 @@ func (swc *SensitiveWordChecker) textToPinyinWithMapping(text string) (string, [
 
 // Insert 添加敏感词到字典树
 func (swc *SensitiveWordChecker) Insert(word string) {
-	node := swc.root
 	word = swc.format(word)
 	if word == "" {
 		return
 	}
 
-	for _, char := range word {
-		if _, exists := node.children[char]; !exists {
-			node.children[char] = &TrieNode{
-				children: make(map[rune]*TrieNode),
-				isEnd:    false,
-			}
-		}
-		node = node.children[char]
-	}
-	node.isEnd = true
+	// 插入原文
+	swc.insertToTrie(word, false)
 
 	// 如果启用了谐音模式，且敏感词只包含中文字符，则同时插入拼音形式
 	if swc.homophoneMode && isPureChinese(word) {
 		swc.insertPinyin(word)
 	}
+}
+
+// insertToTrie 将单词插入字典树
+// word: 要插入的单词
+// isHomophone: 是否为谐音词
+func (swc *SensitiveWordChecker) insertToTrie(word string, isHomophone bool) {
+	node := swc.root
+	for _, char := range word {
+		if _, exists := node.children[char]; !exists {
+			node.children[char] = &TrieNode{
+				children:    make(map[rune]*TrieNode),
+				isEnd:       false,
+				isHomophone: isHomophone,
+			}
+		}
+		node = node.children[char]
+	}
+	node.isEnd = true
+	node.isHomophone = isHomophone
 }
 
 // isPureChinese 检查字符串是否只包含中文字符
@@ -223,23 +372,9 @@ func isPureChinese(s string) bool {
 // insertPinyin 插入词的拼音形式（用于谐音匹配）
 func (swc *SensitiveWordChecker) insertPinyin(word string) {
 	pinyinStr := swc.textToPinyin(word)
-	if pinyinStr == "" {
-		return
+	if pinyinStr != "" {
+		swc.insertToTrie(pinyinStr, true)
 	}
-
-	node := swc.root
-	for _, char := range pinyinStr {
-		if _, exists := node.children[char]; !exists {
-			node.children[char] = &TrieNode{
-				children:    make(map[rune]*TrieNode),
-				isEnd:       false,
-				isHomophone: true,
-			}
-		}
-		node = node.children[char]
-	}
-	node.isEnd = true
-	node.isHomophone = true
 }
 
 // 热重载文件
@@ -274,7 +409,7 @@ func (swc *SensitiveWordChecker) hotReload(filePath string) {
 	}
 }
 
-// 检查文本是否包含敏感词
+// Contains 检查文本是否包含敏感词
 func (swc *SensitiveWordChecker) Contains(text string) bool {
 	text = swc.format(text)
 
@@ -284,16 +419,48 @@ func (swc *SensitiveWordChecker) Contains(text string) bool {
 		checkText, _ = swc.removeSeparators(text)
 	}
 
-	// 首先检查原文本
-	if len(swc.findMatchesInText(checkText)) > 0 {
+	// 首先检查原文本（快速路径）
+	if swc.hasMatchInText(checkText, false) {
 		return true
 	}
 
 	// 如果应该进行谐音匹配，检查拼音形式
 	if !swc.shouldSkipHomophone(text) {
 		pinyinText := swc.textToPinyin(checkText)
-		if len(swc.findHomophoneMatchesInPinyin(pinyinText)) > 0 {
+		if swc.hasMatchInText(pinyinText, true) {
 			return true
+		}
+	}
+
+	return false
+}
+
+// hasMatchInText 检查文本中是否有匹配的敏感词
+// text: 要检查的文本
+// matchHomophoneOnly: 是否只匹配谐音词
+func (swc *SensitiveWordChecker) hasMatchInText(text string, matchHomophoneOnly bool) bool {
+	runes := []rune(text)
+	runLen := len(runes)
+
+	for i := 0; i < runLen; i++ {
+		node := swc.root
+		for j := i; j < runLen; j++ {
+			char := runes[j]
+			child, exists := node.children[char]
+			if !exists {
+				break
+			}
+			node = child
+			if node.isEnd {
+				// 如果只匹配谐音词，检查是否为谐音节点
+				if !matchHomophoneOnly || node.isHomophone {
+					return true
+				}
+				// 如果匹配所有类型，直接返回
+				if !matchHomophoneOnly {
+					return true
+				}
+			}
 		}
 	}
 
