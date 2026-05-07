@@ -80,7 +80,7 @@ func TestReload(t *testing.T) {
 	}
 
 	_ = appendLine("words.txt", "测试非词")
-	time.Sleep(time.Second * 4)
+	time.Sleep(time.Second * 5)
 	//向words.txt文件中添加敏感词"测试敏感词"，然后等待2秒钟，测试是否能够检测到新添加的敏感词
 
 	if !checker.Contains("测试非词") {

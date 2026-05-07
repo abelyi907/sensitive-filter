@@ -6,101 +6,87 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mozillazg/go-pinyin"
 )
 
-/**
-敏感词检查器
-
-*/
-
-// 字典树节点
+// TrieNode 字典树节点
 type TrieNode struct {
-	children    map[rune]*TrieNode
-	isEnd       bool
-	isHomophone bool // 标记是否为谐音词
+	children map[rune]*TrieNode
+	isEnd    bool
+	// isHomophone 标记是否为谐音词（仅在 isEnd=true 时有意义）
+	isHomophone bool
 }
 
 // NewTrieNode 创建新的字典树节点
 func NewTrieNode() *TrieNode {
-	return &TrieNode{
-		children: make(map[rune]*TrieNode),
-		isEnd:    false,
-	}
+	return &TrieNode{children: make(map[rune]*TrieNode)}
+}
+
+// matchResult 敏感词匹配结果
+type matchResult struct {
+	word  string
+	start int
+	end   int
 }
 
 // SensitiveWordChecker 敏感词检查器
 type SensitiveWordChecker struct {
 	root          *TrieNode
-	homophoneMode bool // 是否启用谐音模式
-	deformMode    bool // 是否启用变形词模式
-	martianMode   bool // 是否启用火星文模式
-	pinyinArgs    pinyin.Args
+	homophoneMode bool // 谐音模式
+	deformMode    bool // 变形词模式
+	martianMode   bool // 火星文模式
 }
 
+// SensitiveChecker 默认全局实例
 var SensitiveChecker *SensitiveWordChecker
 
-// 创建新的敏感词检查器
+// 拼音转换参数（不可变常量）
+var pinyinArgs = pinyin.Args{
+	Style:     pinyin.Normal,
+	Separator: "",
+}
+
+// New 创建新的敏感词检查器，默认启用所有模式
 func (swc *SensitiveWordChecker) New() *SensitiveWordChecker {
 	return &SensitiveWordChecker{
 		root:          NewTrieNode(),
-		homophoneMode: true, // 默认启用谐音模式
-		deformMode:    true, // 默认启用变形词模式
-		martianMode:   true, // 默认启用火星文模式
-		pinyinArgs: pinyin.Args{
-			Style:     pinyin.Normal, // 不带声调的拼音
-			Separator: "",
-		},
+		homophoneMode: true,
+		deformMode:    true,
+		martianMode:   true,
 	}
 }
 
-// 统一对待处理文件进行处理
+// format 统一归一化处理：小写、trim、火星文转换
 func (swc *SensitiveWordChecker) format(text string) string {
 	text = strings.ToLower(text)
 	text = strings.TrimSpace(text)
-
-	// 如果启用了火星文模式，进行标准化处理
 	if swc.martianMode {
 		text = normalizeMartian(text)
 	}
-
 	return text
 }
 
 // EnableHomophoneMode 启用谐音过滤模式
-func (swc *SensitiveWordChecker) EnableHomophoneMode() {
-	swc.homophoneMode = true
-}
+func (swc *SensitiveWordChecker) EnableHomophoneMode() { swc.homophoneMode = true }
 
 // DisableHomophoneMode 禁用谐音过滤模式
-func (swc *SensitiveWordChecker) DisableHomophoneMode() {
-	swc.homophoneMode = false
-}
+func (swc *SensitiveWordChecker) DisableHomophoneMode() { swc.homophoneMode = false }
 
 // EnableDeformMode 启用变形词过滤模式
-func (swc *SensitiveWordChecker) EnableDeformMode() {
-	swc.deformMode = true
-}
+func (swc *SensitiveWordChecker) EnableDeformMode() { swc.deformMode = true }
 
 // DisableDeformMode 禁用变形词过滤模式
-func (swc *SensitiveWordChecker) DisableDeformMode() {
-	swc.deformMode = false
-}
+func (swc *SensitiveWordChecker) DisableDeformMode() { swc.deformMode = false }
 
 // EnableMartianMode 启用火星文过滤模式
-func (swc *SensitiveWordChecker) EnableMartianMode() {
-	swc.martianMode = true
-}
+func (swc *SensitiveWordChecker) EnableMartianMode() { swc.martianMode = true }
 
 // DisableMartianMode 禁用火星文过滤模式
-func (swc *SensitiveWordChecker) DisableMartianMode() {
-	swc.martianMode = false
-}
+func (swc *SensitiveWordChecker) DisableMartianMode() { swc.martianMode = false }
 
 // AddMartianMapping 添加自定义火星文映射
-// martian: 火星文形式
-// standard: 标准文字形式
 func AddMartianMapping(martian, standard string) {
 	martianMap[martian] = standard
 }
@@ -110,48 +96,41 @@ func RemoveMartianMapping(martian string) {
 	delete(martianMap, martian)
 }
 
-// GetMartianMappings 获取所有火星文映射（用于调试）
+// GetMartianMappings 获取所有火星文映射副本
 func GetMartianMappings() map[string]string {
-	// 返回副本，避免外部修改
-	c := make(map[string]string)
+	c := make(map[string]string, len(martianMap))
 	for k, v := range martianMap {
 		c[k] = v
 	}
 	return c
 }
 
-// removeSeparators 移除文本中的分隔符，并返回清理后的文本和位置映射
-func (swc *SensitiveWordChecker) removeSeparators(text string) (string, []int) {
-	// 常见的分隔符
-	separators := getSeparator()
-
+// removeSeparators 移除文本中的分隔符，返回清理后的文本和位置映射
+func removeSeparators(text string) (string, []int) {
 	runes := []rune(text)
-	var cleanedRunes []rune
-	positionMap := make([]int, 0)
+	cleanedRunes := make([]rune, 0, len(runes))
+	positionMap := make([]int, 0, len(runes))
 
 	for i, char := range runes {
-		if !separators[char] {
+		if !separatorSet[char] {
 			cleanedRunes = append(cleanedRunes, char)
 			positionMap = append(positionMap, i)
 		}
 	}
-
 	return string(cleanedRunes), positionMap
 }
 
 // containsSeparator 检查文本是否包含分隔符
 func containsSeparator(text string) bool {
-	separators := getSeparator()
-
 	for _, char := range text {
-		if separators[char] {
+		if separatorSet[char] {
 			return true
 		}
 	}
 	return false
 }
 
-// 常见分隔符集合（包级别常量，避免重复创建）
+// separatorSet 常见分隔符集合
 var separatorSet = map[rune]bool{
 	'-': true, '_': true, '.': true, '~': true, '@': true,
 	'#': true, '$': true, '%': true, '^': true, '&': true,
@@ -161,64 +140,33 @@ var separatorSet = map[rune]bool{
 	'\'': true, '"': true, '`': true, ' ': true,
 }
 
-// 火星文映射表（火星文 -> 标准文字）
-// 包括：同音字、形近字、网络用语等
+// martianMap 火星文映射表
 var martianMap = map[string]string{
-	// 单字映射
-	"卜":  "不",
-	"8":  "不",
-	"滴":  "的",
-	"德":  "的",
-	"乐":  "了",
-	"啦":  "了",
-	"莪":  "我",
-	"偶":  "我",
-	"伱":  "你",
-	"祢":  "你",
-	"ta": "他",
-	"TA": "他",
+	"卜": "不", "8": "不",
+	"滴": "的", "德": "的",
+	"乐": "了", "啦": "了",
+	"莪": "我", "偶": "我",
+	"伱": "你", "祢": "你",
+	"ta": "他", "TA": "他",
 
-	// 词语映射
-	"稀饭":  "喜欢",
-	"神马":  "什么",
-	"虾米":  "什么",
-	"酱紫":  "这样子",
-	"表":   "不要",
-	"造":   "知道",
-	"晓得":  "知道",
-	"灰常":  "非常",
-	"粉":   "很",
-	"素":   "是",
-	"系":   "是",
-	"木有":  "没有",
-	"米有":  "没有",
-	"肿么":  "怎么",
-	"为神马": "为什么",
-	"童鞋":  "同学",
-	"淫":   "人",
-	"银":   "人",
-	"盆友":  "朋友",
-	"粑粑":  "爸爸",
-	"麻咪":  "妈妈",
-	"北鼻":  "baby",
-	"达令":  "darling",
-	"3Q":  "谢谢",
-	"thx": "谢谢",
-	"3ks": "谢谢",
-	"88":  "拜拜",
-	"白白":  "拜拜",
-	"安":   "晚安",
-	"早安":  "早上好",
-	"午安":  "中午好",
+	"稀饭": "喜欢", "神马": "什么", "虾米": "什么",
+	"酱紫": "这样子",
+	"表": "不要", "造": "知道", "晓得": "知道",
+	"灰常": "非常",
+	"粉": "很", "素": "是", "系": "是",
+	"木有": "没有", "米有": "没有",
+	"肿么": "怎么", "为神马": "为什么",
+	"童鞋": "同学",
+	"淫": "人", "银": "人",
+	"盆友": "朋友",
+	"粑粑": "爸爸", "麻咪": "妈妈",
+	"北鼻": "baby", "达令": "darling",
+	"3Q": "谢谢", "thx": "谢谢", "3ks": "谢谢",
+	"88": "拜拜", "白白": "拜拜",
+	"安": "晚安", "早安": "早上好", "午安": "中午好",
 }
 
-// getSeparator 返回分隔符集合
-func getSeparator() map[rune]bool {
-	return separatorSet
-}
-
-// normalizeMartian 将火星文转换为标准文字
-// 采用贪心算法，优先匹配最长词，时间复杂度 O(n)
+// normalizeMartian 将火星文转换为标准文字（贪心最长词匹配，O(n)）
 func normalizeMartian(text string) string {
 	if text == "" {
 		return text
@@ -226,18 +174,16 @@ func normalizeMartian(text string) string {
 
 	var result strings.Builder
 	runes := []rune(text)
-	i := 0
-	runLen := len(runes)
+	result.Grow(utf8.RuneCountInString(text))
 
-	for i < runLen {
+	for i, runeLen := 0, len(runes); i < runeLen; {
 		matched := false
 
-		// 尝试匹配以当前字符开头的最长词语（从长到短，最多4 字）
+		// 优先匹配最长词（从4字到2字）
 		for length := 4; length >= 2; length-- {
 			end := i + length
-			if end <= runLen {
-				subStr := string(runes[i:end])
-				if standard, exists := martianMap[subStr]; exists {
+			if end <= runeLen {
+				if standard, exists := martianMap[string(runes[i:end])]; exists {
 					result.WriteString(standard)
 					i = end
 					matched = true
@@ -247,9 +193,8 @@ func normalizeMartian(text string) string {
 		}
 
 		if !matched {
-			// 尝试匹配单字
-			char := string(runes[i])
-			if standard, exists := martianMap[char]; exists {
+			// 单字匹配
+			if standard, exists := martianMap[string(runes[i])]; exists {
 				result.WriteString(standard)
 			} else {
 				result.WriteRune(runes[i])
@@ -257,7 +202,6 @@ func normalizeMartian(text string) string {
 			i++
 		}
 	}
-
 	return result.String()
 }
 
@@ -266,62 +210,50 @@ func isChinese(char rune) bool {
 	return char >= '\u4e00' && char <= '\u9fff'
 }
 
-// textToPinyin 将文本转换为拼音字符串
-func (swc *SensitiveWordChecker) textToPinyin(text string) string {
-	runes := []rune(text)
-	pinyinParts := pinyin.LazyConvert(text, &swc.pinyinArgs)
+// textToPinyin 将文本转换为拼音字符串（非中文原样保留）
+func textToPinyin(text string) string {
+	pinyinParts := pinyin.LazyConvert(text, &pinyinArgs)
+	if len(pinyinParts) == 0 {
+		return text
+	}
 
 	var result strings.Builder
+	result.Grow(len(text))
 	pyIndex := 0
-
-	for _, char := range runes {
-		// 判断是否为中文字符
-		if isChinese(char) {
-			// 中文字符，使用拼音
-			if pyIndex < len(pinyinParts) {
-				result.WriteString(pinyinParts[pyIndex])
-				pyIndex++
-			}
+	for _, char := range text {
+		if isChinese(char) && pyIndex < len(pinyinParts) {
+			result.WriteString(pinyinParts[pyIndex])
+			pyIndex++
 		} else {
-			// 非中文字符，保留原字符
 			result.WriteRune(char)
 		}
 	}
-
 	return result.String()
 }
 
 // textToPinyinWithMapping 将文本转换为拼音，并返回拼音到原文位置的映射
-func (swc *SensitiveWordChecker) textToPinyinWithMapping(text string) (string, []int) {
+func textToPinyinWithMapping(text string) (string, []int) {
 	runes := []rune(text)
-	pinyinParts := pinyin.LazyConvert(text, &swc.pinyinArgs)
+	pinyinParts := pinyin.LazyConvert(text, &pinyinArgs)
 
-	// 构建拼音字符串和位置映射
-	var pinyinStr strings.Builder
-	positionMap := make([]int, 0)
+	var buf strings.Builder
+	positionMap := make([]int, 0, len(runes))
 	pyIndex := 0
 
 	for i, char := range runes {
-		// 判断是否为中文字符
-		if isChinese(char) {
-			// 中文字符，使用拼音
-			if pyIndex < len(pinyinParts) {
-				py := pinyinParts[pyIndex]
-				// 记录每个拼音字符对应的原文位置
-				for j := 0; j < len(py); j++ {
-					positionMap = append(positionMap, i)
-				}
-				pinyinStr.WriteString(py)
-				pyIndex++
+		if isChinese(char) && pyIndex < len(pinyinParts) {
+			py := pinyinParts[pyIndex]
+			for j := 0; j < len(py); j++ {
+				positionMap = append(positionMap, i)
 			}
+			buf.WriteString(py)
+			pyIndex++
 		} else {
-			// 非中文字符，保留原字符
 			positionMap = append(positionMap, i)
-			pinyinStr.WriteRune(char)
+			buf.WriteRune(char)
 		}
 	}
-
-	return pinyinStr.String(), positionMap
+	return buf.String(), positionMap
 }
 
 // Insert 添加敏感词到字典树
@@ -331,29 +263,27 @@ func (swc *SensitiveWordChecker) Insert(word string) {
 		return
 	}
 
-	// 插入原文
-	swc.insertToTrie(word, false)
+	insertToTrie(swc.root, word, false)
 
-	// 如果启用了谐音模式，且敏感词只包含中文字符，则同时插入拼音形式
+	// 纯中文词同时插入拼音形式用于谐音匹配
 	if swc.homophoneMode && isPureChinese(word) {
-		swc.insertPinyin(word)
+		pinyinStr := textToPinyin(word)
+		if pinyinStr != "" {
+			insertToTrie(swc.root, pinyinStr, true)
+		}
 	}
 }
 
 // insertToTrie 将单词插入字典树
-// word: 要插入的单词
-// isHomophone: 是否为谐音词
-func (swc *SensitiveWordChecker) insertToTrie(word string, isHomophone bool) {
-	node := swc.root
+func insertToTrie(root *TrieNode, word string, isHomophone bool) {
+	node := root
 	for _, char := range word {
-		if _, exists := node.children[char]; !exists {
-			node.children[char] = &TrieNode{
-				children:    make(map[rune]*TrieNode),
-				isEnd:       false,
-				isHomophone: isHomophone,
-			}
+		child, exists := node.children[char]
+		if !exists {
+			child = NewTrieNode()
+			node.children[char] = child
 		}
-		node = node.children[char]
+		node = child
 	}
 	node.isEnd = true
 	node.isHomophone = isHomophone
@@ -369,41 +299,26 @@ func isPureChinese(s string) bool {
 	return true
 }
 
-// insertPinyin 插入词的拼音形式（用于谐音匹配）
-func (swc *SensitiveWordChecker) insertPinyin(word string) {
-	pinyinStr := swc.textToPinyin(word)
-	if pinyinStr != "" {
-		swc.insertToTrie(pinyinStr, true)
-	}
-}
-
-// 热重载文件
+// hotReload 热重载敏感词库（后台 goroutine，每 2 秒检测文件变更）
 func (swc *SensitiveWordChecker) hotReload(filePath string) {
 	for {
 		fileInfo, err := os.Stat(filePath)
 		if err != nil {
-			//log.Printf("无法获取文件信息: %v\n", err)
-			time.Sleep(time.Second * 1)
+			time.Sleep(time.Second)
 			continue
 		}
 		modTime := fileInfo.ModTime()
-		time.Sleep(time.Second * 2)
-		newFileInfo, err := os.Stat(filePath)
+		time.Sleep(2 * time.Second)
+		newInfo, err := os.Stat(filePath)
 		if err != nil {
-			//log.Printf("无法获取文件信息: %v\n", err)
 			continue
 		}
-		newModTime := newFileInfo.ModTime()
-		if modTime != newModTime {
+		if !modTime.Equal(newInfo.ModTime()) {
 			log.Println("敏感词库已更新，重新加载词库...")
 			swcNew := SensitiveChecker.New()
-			err = swcNew.LoadFromFileByLine(filePath)
-			if err != nil {
-				//log.Printf("加载敏感词库变化后重新加载失败: %v\n", err)
+			if err := swcNew.LoadFromFileByLine(filePath); err != nil {
 				continue
 			}
-
-			// 更新当前实例的所有字段，确保指针正确指向新的数据
 			swc.root = swcNew.root
 		}
 	}
@@ -413,167 +328,78 @@ func (swc *SensitiveWordChecker) hotReload(filePath string) {
 func (swc *SensitiveWordChecker) Contains(text string) bool {
 	text = swc.format(text)
 
-	// 如果启用了变形词模式，先清理分隔符
 	checkText := text
 	if swc.deformMode {
-		checkText, _ = swc.removeSeparators(text)
+		checkText, _ = removeSeparators(text)
 	}
 
-	// 首先检查原文本（快速路径）
-	if swc.hasMatchInText(checkText, false) {
+	// 原文匹配
+	if hasMatchInText(swc.root, checkText, false) {
 		return true
 	}
 
-	// 如果应该进行谐音匹配，检查拼音形式
-	if !swc.shouldSkipHomophone(text) {
-		pinyinText := swc.textToPinyin(checkText)
-		if swc.hasMatchInText(pinyinText, true) {
+	// 谐音匹配
+	if swc.canHomophoneMatch(text) {
+		pinyinText := textToPinyin(checkText)
+		if hasMatchInText(swc.root, pinyinText, true) {
 			return true
 		}
 	}
-
 	return false
 }
 
-// hasMatchInText 检查文本中是否有匹配的敏感词
-// text: 要检查的文本
-// matchHomophoneOnly: 是否只匹配谐音词
-func (swc *SensitiveWordChecker) hasMatchInText(text string, matchHomophoneOnly bool) bool {
+// hasMatchInText 在文本中查找敏感词匹配
+// matchHomophoneOnly: true=只匹配谐音词, false=匹配全部
+func hasMatchInText(root *TrieNode, text string, matchHomophoneOnly bool) bool {
 	runes := []rune(text)
-	runLen := len(runes)
-
-	for i := 0; i < runLen; i++ {
-		node := swc.root
-		for j := i; j < runLen; j++ {
-			char := runes[j]
-			child, exists := node.children[char]
+	for i, runeLen := 0, len(runes); i < runeLen; i++ {
+		node := root
+		for j := i; j < runeLen; j++ {
+			child, exists := node.children[runes[j]]
 			if !exists {
 				break
 			}
 			node = child
-			if node.isEnd {
-				// 如果只匹配谐音词，检查是否为谐音节点
-				if !matchHomophoneOnly || node.isHomophone {
-					return true
-				}
-				// 如果匹配所有类型，直接返回
-				if !matchHomophoneOnly {
-					return true
-				}
+			if node.isEnd && (!matchHomophoneOnly || node.isHomophone) {
+				return true
 			}
 		}
 	}
-
 	return false
 }
 
-// shouldSkipHomophone 判断是否应该跳过谐音匹配
-func (swc *SensitiveWordChecker) shouldSkipHomophone(originalText string) bool {
+// canHomophoneMatch 判断是否允许谐音匹配
+func (swc *SensitiveWordChecker) canHomophoneMatch(text string) bool {
 	if !swc.homophoneMode {
-		return true
+		return false
 	}
-	if !swc.deformMode && containsSeparator(originalText) {
-		return true
+	if !swc.deformMode && containsSeparator(text) {
+		return false
 	}
-	return false
+	return true
 }
 
-// findMatchesInText 在文本中查找所有匹配的敏感词（原文匹配）
-func (swc *SensitiveWordChecker) findMatchesInText(text string) []string {
-	var matches []string
+// findMatchesWithPositions 查找所有原文匹配的敏感词及位置
+func findMatchesWithPositions(root *TrieNode, text string) []matchResult {
 	runes := []rune(text)
+	matches := make([]matchResult, 0)
 
-	for i := 0; i < len(runes); i++ {
-		node := swc.root
-		j := i
+	for i, runeLen := 0, len(runes); i < runeLen; i++ {
+		node := root
 		var matchedRunes []rune
-
-		for j < len(runes) {
-			char := runes[j]
-			if child, exists := node.children[char]; exists {
-				node = child
-				matchedRunes = append(matchedRunes, char)
-				if node.isEnd && !node.isHomophone {
-					matches = append(matches, string(matchedRunes))
-					break
-				}
-				j++
-			} else {
+		for j := i; j < runeLen; j++ {
+			child, exists := node.children[runes[j]]
+			if !exists {
+				break
+			}
+			node = child
+			matchedRunes = append(matchedRunes, runes[j])
+			if node.isEnd && !node.isHomophone {
+				matches = append(matches, matchResult{string(matchedRunes), i, j})
 				break
 			}
 		}
 	}
-
-	return matches
-}
-
-// findMatchesWithPositions 在文本中查找所有匹配的敏感词及其位置（原文匹配）
-func (swc *SensitiveWordChecker) findMatchesWithPositions(text string) []struct {
-	word  string
-	start int
-	end   int
-} {
-	var matches []struct {
-		word  string
-		start int
-		end   int
-	}
-	runes := []rune(text)
-
-	for i := 0; i < len(runes); i++ {
-		node := swc.root
-		j := i
-		var matchedRunes []rune
-
-		for j < len(runes) {
-			char := runes[j]
-			if child, exists := node.children[char]; exists {
-				node = child
-				matchedRunes = append(matchedRunes, char)
-				if node.isEnd && !node.isHomophone {
-					matches = append(matches, struct {
-						word  string
-						start int
-						end   int
-					}{string(matchedRunes), i, j})
-					break
-				}
-				j++
-			} else {
-				break
-			}
-		}
-	}
-
-	return matches
-}
-
-// findHomophoneMatchesInPinyin 在拼音文本中查找谐音匹配
-func (swc *SensitiveWordChecker) findHomophoneMatchesInPinyin(pinyinText string) []string {
-	var matches []string
-	pinyinRunes := []rune(pinyinText)
-
-	for i := 0; i < len(pinyinRunes); i++ {
-		node := swc.root
-		j := i
-		var matchedRunes []rune
-
-		for j < len(pinyinRunes) {
-			char := pinyinRunes[j]
-			if child, exists := node.children[char]; exists {
-				node = child
-				matchedRunes = append(matchedRunes, char)
-				if node.isEnd && node.isHomophone {
-					matches = append(matches, string(matchedRunes))
-					break
-				}
-				j++
-			} else {
-				break
-			}
-		}
-	}
-
 	return matches
 }
 
@@ -594,192 +420,138 @@ func hasPositionOverlap(positions map[int]bool, start, end int) bool {
 	return false
 }
 
-// 找到文本中所有的敏感词
+// FindAll 查找文本中所有敏感词
 func (swc *SensitiveWordChecker) FindAll(text string) []string {
-	var foundWords []string
 	text = swc.format(text)
 
-	// 如果启用了变形词模式，先清理分隔符
 	checkText := text
 	if swc.deformMode {
-		checkText, _ = swc.removeSeparators(text)
+		checkText, _ = removeSeparators(text)
 	}
 
-	// 记录已经找到的匹配位置，避免重复
 	matchedPositions := make(map[int]bool)
+	found := make([]string, 0)
 
-	// 查找原文本中的敏感词
-	matches := swc.findMatchesWithPositions(checkText)
-	for _, match := range matches {
-		foundWords = append(foundWords, match.word)
-		markMatchedPositions(matchedPositions, match.start, match.end)
+	// 原文匹配
+	for _, m := range findMatchesWithPositions(swc.root, checkText) {
+		found = append(found, m.word)
+		markMatchedPositions(matchedPositions, m.start, m.end)
 	}
 
-	// 如果应该进行谐音匹配，查找拼音形式的匹配
-	if !swc.shouldSkipHomophone(text) {
-		pinyinText := swc.textToPinyin(checkText)
+	// 谐音匹配
+	if swc.canHomophoneMatch(text) {
+		pinyinText := textToPinyin(checkText)
 		pinyinRunes := []rune(pinyinText)
 
-		for i := 0; i < len(pinyinRunes); i++ {
-			// 如果这个位置已经在原文匹配中被覆盖，跳过
+		for i, pyLen := 0, len(pinyinRunes); i < pyLen; i++ {
 			if matchedPositions[i] {
 				continue
 			}
-
 			node := swc.root
-			j := i
 			var matchedRunes []rune
-
-			for j < len(pinyinRunes) {
-				char := pinyinRunes[j]
-				if child, exists := node.children[char]; exists {
-					node = child
-					matchedRunes = append(matchedRunes, char)
-					if node.isEnd && node.isHomophone {
-						// 检查是否已经有原文匹配覆盖了这个范围
-						if !hasPositionOverlap(matchedPositions, i, j) {
-							foundWords = append(foundWords, string(matchedRunes))
-							markMatchedPositions(matchedPositions, i, j)
-						}
-						break
-					}
-					j++
-				} else {
+			for j := i; j < pyLen; j++ {
+				child, exists := node.children[pinyinRunes[j]]
+				if !exists {
+					break
+				}
+				node = child
+				matchedRunes = append(matchedRunes, pinyinRunes[j])
+				if node.isEnd && node.isHomophone && !hasPositionOverlap(matchedPositions, i, j) {
+					found = append(found, string(matchedRunes))
+					markMatchedPositions(matchedPositions, i, j)
 					break
 				}
 			}
 		}
 	}
-
-	return foundWords
+	return found
 }
 
-// 从文件加载敏感词列表，每行一个敏感词
+// LoadFromFileByLine 从文件加载敏感词列表，每行一个
 func (swc *SensitiveWordChecker) LoadFromFileByLine(filepath string) error {
 	file, err := os.Open(filepath)
 	if err != nil {
 		return err
 	}
-	defer func(file *os.File) {
-		err = file.Close()
-		if err != nil {
-
-		}
-	}(file)
+	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.TrimSpace(line) != "" {
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" {
 			swc.Insert(line)
 		}
 	}
-
 	return scanner.Err()
 }
 
-// Replace 敏感词替换，将敏感词替换为指定字符
+// Replace 替换文本中的敏感词为指定字符
 func (swc *SensitiveWordChecker) Replace(text string, replacement rune) string {
 	text = swc.format(text)
 	runes := []rune(text)
 	textLen := len(runes)
 
-	// 记录需要替换的位置
-	replacePositions := make(map[int]bool)
-
-	// 如果启用了变形词模式，先清理分隔符并获取位置映射
+	// 变形词模式：清理分隔符并获取位置映射
 	checkText := text
-	var deformPositionMap []int
+	var deformPosMap []int
 	if swc.deformMode {
-		checkText, deformPositionMap = swc.removeSeparators(text)
+		checkText, deformPosMap = removeSeparators(text)
 	}
 
+	replacePos := make(map[int]bool, textLen/2)
 	checkRunes := []rune(checkText)
-	checkLen := len(checkRunes)
 
-	// 首先查找清理后文本中的敏感词（包括中文和拼音）
-	for i := 0; i < checkLen; i++ {
+	// 第一遍：原文匹配（含谐音）
+	for i, checkLen := 0, len(checkRunes); i < checkLen; i++ {
 		node := swc.root
-		j := i
-		matchStart := i
-
-		for j < checkLen {
-			char := checkRunes[j]
-			if child, exists := node.children[char]; exists {
-				node = child
-				// 匹配到敏感词（无论是原文还是拼音形式）
-				if node.isEnd {
-					// 记录需要替换的位置
-					for k := matchStart; k <= j; k++ {
-						if swc.deformMode && len(deformPositionMap) > 0 {
-							// 通过位置映射找到原文中的位置
-							if k < len(deformPositionMap) {
-								replacePositions[deformPositionMap[k]] = true
-							}
-						} else {
-							replacePositions[k] = true
-						}
+		for j := i; j < checkLen; j++ {
+			child, exists := node.children[checkRunes[j]]
+			if !exists {
+				break
+			}
+			node = child
+			if node.isEnd {
+				for k := i; k <= j; k++ {
+					pos := k
+					if swc.deformMode && k < len(deformPosMap) {
+						pos = deformPosMap[k]
 					}
-					break
+					if pos < textLen {
+						replacePos[pos] = true
+					}
 				}
-				j++
-			} else {
 				break
 			}
 		}
 	}
 
-	// 如果启用了谐音模式，同时将中文转换为拼音后查找匹配
-	// 但如果禁用了变形词模式且原文包含分隔符，则跳过谐音检查
-	if swc.homophoneMode {
-		skipHomophone := false
-		if !swc.deformMode {
-			if containsSeparator(text) {
-				skipHomophone = true
-			}
-		}
+	// 第二遍：谐音匹配
+	if swc.canHomophoneMatch(text) {
+		pinyinText, positionMap := textToPinyinWithMapping(checkText)
+		pinyinRunes := []rune(pinyinText)
 
-		if !skipHomophone {
-			pinyinText, positionMap := swc.textToPinyinWithMapping(checkText)
-			pinyinRunes := []rune(pinyinText)
-			pinyinLen := len(pinyinRunes)
-
-			for i := 0; i < pinyinLen; i++ {
-				node := swc.root
-				j := i
-				matchStart := i
-				var matchedLen int
-
-				for j < pinyinLen {
-					char := pinyinRunes[j]
-					if child, exists := node.children[char]; exists {
-						node = child
-						matchedLen++
-						if node.isEnd && node.isHomophone {
-							// 找到谐音匹配，通过位置映射找到原文中对应的字符
-							for k := matchStart; k < matchStart+matchedLen && k < len(positionMap); k++ {
-								cleanedPos := positionMap[k]
-								var originalPos int
-								if swc.deformMode && len(deformPositionMap) > 0 {
-									// 通过变形词位置映射找到原文位置
-									if cleanedPos < len(deformPositionMap) {
-										originalPos = deformPositionMap[cleanedPos]
-									} else {
-										continue
-									}
-								} else {
-									originalPos = cleanedPos
-								}
-								if originalPos < textLen {
-									replacePositions[originalPos] = true
-								}
-							}
-							break
+		for i, pyLen := 0, len(pinyinRunes); i < pyLen; i++ {
+			node := swc.root
+			matchedLen := 0
+			for j := i; j < pyLen; j++ {
+				child, exists := node.children[pinyinRunes[j]]
+				if !exists {
+					break
+				}
+				node = child
+				matchedLen++
+				if node.isEnd && node.isHomophone {
+					for k := i; k < i+matchedLen && k < len(positionMap); k++ {
+						cleanedPos := positionMap[k]
+						pos := cleanedPos
+						if swc.deformMode && cleanedPos < len(deformPosMap) {
+							pos = deformPosMap[cleanedPos]
 						}
-						j++
-					} else {
-						break
+						if pos < textLen {
+							replacePos[pos] = true
+						}
 					}
+					break
 				}
 			}
 		}
@@ -787,21 +559,18 @@ func (swc *SensitiveWordChecker) Replace(text string, replacement rune) string {
 
 	// 执行替换
 	for i := 0; i < textLen; i++ {
-		if replacePositions[i] {
+		if replacePos[i] {
 			runes[i] = replacement
 		}
 	}
-
 	return string(runes)
 }
 
-// LoadFromTextFile 从文本文件中加载敏感词库,监察库中的内容有变化时，重新加载
+// LoadFromTextFile 从文件加载敏感词库，并启动热重载监控
 func (swc *SensitiveWordChecker) LoadFromTextFile(filepath string) {
-	err := swc.LoadFromFileByLine(filepath)
-	if err != nil {
+	if err := swc.LoadFromFileByLine(filepath); err != nil {
 		log.Printf("加载敏感词库失败: %v\n", err)
 		return
 	}
-	// 监控词库变化，若词库有变化，则重新加载
 	go swc.hotReload(filepath)
 }
